@@ -4,6 +4,8 @@ package api
 import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	"github.com/Rohan-Muslekar/knobs/web"
 )
 
 // Deps carries everything the HTTP layer needs. It grows as later phases add
@@ -17,6 +19,10 @@ func NewRouter(deps Deps) chi.Router {
 	r.Use(middleware.Recoverer)
 
 	r.Get("/healthz", healthHandler)
+
+	// SPA catch-all mounted last; explicit API routes above take precedence.
+	r.NotFound(spaHandler(web.Assets()))
+	r.Get("/", spaHandler(web.Assets()))
 
 	return r
 }
