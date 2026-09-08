@@ -7,11 +7,10 @@ import (
 	"github.com/pressly/goose/v3"
 )
 
+// Migrations live in-package (not repo-root) because //go:embed cannot reach outside the package tree.
+//
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
-
-// MigrationsFS exposes the embedded migration files.
-var MigrationsFS = migrationsFS
 
 // RunMigrations applies every embedded migration up. It expects a database/sql
 // handle opened with the pgx stdlib driver.

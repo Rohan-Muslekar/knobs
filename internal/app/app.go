@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/http"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 
@@ -42,7 +43,14 @@ func Run(ctx context.Context) error {
 		return fmt.Errorf("run migrations: %w", err)
 	}
 
-	srv := &http.Server{Addr: cfg.ListenAddr, Handler: NewRouter()}
+	srv := &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           NewRouter(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	fmt.Printf("knobs listening on %s\n", cfg.ListenAddr)
 	return srv.ListenAndServe()
 }
