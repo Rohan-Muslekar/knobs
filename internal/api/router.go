@@ -101,6 +101,7 @@ func NewRouter(deps Deps) chi.Router {
 			r.Use(apiKeyGuard(deps))
 			r.Get("/snapshot", deps.handleSnapshot)
 			r.Get("/stream", deps.handleStream)
+			r.Get("/schema", deps.handleSchemaDelivery)
 		})
 	})
 
