@@ -10,8 +10,5 @@ CREATE TABLE api_key (
     last_used_at   timestamptz
 );
 
-CREATE INDEX api_key_hash_idx ON api_key(hash);
-
 -- +goose Down
-DROP INDEX api_key_hash_idx;
 DROP TABLE api_key;

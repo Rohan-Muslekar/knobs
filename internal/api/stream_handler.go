@@ -25,14 +25,18 @@ const defaultHeartbeatInterval = 25 * time.Second
 // handleSnapshot it sits behind apiKeyGuard: the environment comes from the
 // presented key's scope, never a query parameter.
 //
-// Protocol: on connect, if the environment's current version is newer than
-// the `since` query parameter (default 0), that snapshot is sent
-// immediately. The connection then stays open, subscribed to the delivery
-// Hub, and every subsequently published snapshot for this environment is
-// sent as its own `data: <json>\n\n` frame. A `: heartbeat\n\n` comment is
-// sent whenever the connection has been idle for Deps.StreamHeartbeat (or
-// defaultHeartbeatInterval). The handler returns — unsubscribing from the
-// Hub — as soon as the client disconnects (r.Context().Done()).
+// Protocol: on connect, if the environment's current delivery revision is
+// newer than the `since` query parameter (default 0, meaning "last revision
+// seen"), that snapshot is sent immediately. Revision — not the user-facing
+// config version — is the gating axis: a rollback can move version
+// backwards, but revision only ever increases, so `since=<lastRevision>` is
+// unambiguous even across a rollback. The connection then stays open,
+// subscribed to the delivery Hub, and every subsequently published snapshot
+// for this environment is sent as its own `data: <json>\n\n` frame. A `:
+// heartbeat\n\n` comment is sent whenever the connection has been idle for
+// Deps.StreamHeartbeat (or defaultHeartbeatInterval). The handler returns —
+// unsubscribing from the Hub — as soon as the client disconnects
+// (r.Context().Done()).
 func (d Deps) handleStream(w http.ResponseWriter, r *http.Request) {
 	envID, ok := apiKeyEnvID(r.Context())
 	if !ok {
@@ -66,9 +70,9 @@ func (d Deps) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	since := 0
+	var since int64
 	if s := r.URL.Query().Get("since"); s != "" {
-		if n, err := strconv.Atoi(s); err == nil {
+		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
 			since = n
 		}
 	}
@@ -101,10 +105,26 @@ func (d Deps) handleStream(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
+	// Re-read the environment now, after subscribing, rather than reusing
+	// the one loaded above (before subscribing): delivery_revision must
+	// come from the same moment-or-later as cv below, for the same reason
+	// cv itself is read after subscribing rather than before. Reusing the
+	// earlier, possibly-stale env would let a write that lands in the gap
+	// between the first load and Subscribe bump delivery_revision (and fire
+	// a NOTIFY this connection wasn't yet subscribed to catch) while this
+	// handler still gated `since` on the old revision — silently resurrecting
+	// the exact missed-update race the subscribe-first ordering exists to
+	// close.
+	envNow, err := d.Repo.EnvironmentByID(r.Context(), d.Repo.Pool(), envID)
+	if err != nil {
+		log.Printf("delivery: stream %s: could not reload environment for initial snapshot: %v", envID, err)
+		envNow = env
+	}
+
 	cv, err := d.Repo.CurrentVersion(r.Context(), d.Repo.Pool(), envID)
 	switch {
-	case err == nil && cv.Version > since:
-		cs, err := d.Repo.GetOrInitSchema(r.Context(), d.Repo.Pool(), env.ProjectID)
+	case err == nil && envNow.DeliveryRevision > since:
+		cs, err := d.Repo.GetOrInitSchema(r.Context(), d.Repo.Pool(), envNow.ProjectID)
 		if err != nil {
 			// An unexpected load error on the initial snapshot is not fatal
 			// to the stream: the client still benefits from staying
@@ -113,7 +133,7 @@ func (d Deps) handleStream(w http.ResponseWriter, r *http.Request) {
 			// a persistently broken schema load is at least visible in
 			// server logs, even though no individual caller sees it.
 			log.Printf("delivery: stream %s: could not load schema for initial snapshot: %v", envID, err)
-		} else if !writeSnapshot(delivery.BuildSnapshot(cv, cs.Definition)) {
+		} else if !writeSnapshot(delivery.BuildSnapshot(cv, cs.Definition, envNow.DeliveryRevision)) {
 			return
 		}
 	case err != nil && !errors.Is(err, store.ErrNotFound):

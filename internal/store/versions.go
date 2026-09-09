@@ -87,10 +87,22 @@ func (r *Repo) InsertVersion(ctx context.Context, tx DBTX, envID uuid.UUID, vers
 	return v, nil
 }
 
-// SetCurrentVersion points envID's live config at versionID.
-func (r *Repo) SetCurrentVersion(ctx context.Context, tx DBTX, envID, versionID uuid.UUID) error {
-	_, err := tx.Exec(ctx, `UPDATE environment SET current_version_id = $2 WHERE id = $1`, envID, versionID)
-	return err
+// SetCurrentVersion points envID's live config at versionID, and bumps its
+// monotonic delivery_revision by one in the same UPDATE, returning the new
+// revision. Both write paths that can move current_version_id — a normal
+// value save and a rollback — go through this, so both bump the revision:
+// unlike the user-facing Version (which a rollback can move backwards),
+// delivery_revision only ever increases, making it the axis SDKs dedupe and
+// gate `since` on.
+func (r *Repo) SetCurrentVersion(ctx context.Context, tx DBTX, envID, versionID uuid.UUID) (int64, error) {
+	var revision int64
+	err := tx.QueryRow(ctx,
+		`UPDATE environment SET current_version_id = $2, delivery_revision = delivery_revision + 1
+		 WHERE id = $1
+		 RETURNING delivery_revision`,
+		envID, versionID,
+	).Scan(&revision)
+	return revision, err
 }
 
 // ConfigVersionMeta is a history-listing view of a config_version row: it

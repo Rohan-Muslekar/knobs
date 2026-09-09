@@ -121,6 +121,13 @@ func TestSnapshotAPI(t *testing.T) {
 	if h, _ := snapA["schemaHash"].(string); h != wantHash {
 		t.Fatalf("snapshot A schemaHash = %q, want %q", h, wantHash)
 	}
+	// A single PUT values is env A's first-ever write, so its delivery
+	// revision is 1 — same as its version here, since nothing has diverged
+	// them yet (that divergence is what TestSnapshotRevisionMonotonicAcrossRollback
+	// covers).
+	if rev, _ := snapA["revision"].(float64); rev != 1 {
+		t.Fatalf("snapshot A revision = %v, want 1", snapA["revision"])
+	}
 	valuesA, _ := snapA["values"].(map[string]any)
 	if mr, _ := valuesA["maxRetries"].(float64); mr != 3 {
 		t.Fatalf("snapshot A values.maxRetries = %v, want 3", valuesA["maxRetries"])
@@ -200,6 +207,93 @@ func TestSnapshotAPI(t *testing.T) {
 	_ = json.NewDecoder(emptyRec.Body).Decode(&emptyBody)
 	if emptyBody["error"] != "no values set" {
 		t.Fatalf("snapshot for env with no values body = %v, want {error: no values set}", emptyBody)
+	}
+}
+
+// TestSnapshotRevisionMonotonicAcrossRollback is the core regression test
+// for the monotonic delivery revision: a rollback repoints
+// current_version_id at an OLDER config_version, so the user-facing
+// `version` in the delivered snapshot goes backwards, but `revision` — the
+// axis delivery dedup/`since` gating actually uses — must keep climbing
+// regardless, because SetCurrentVersion bumps delivery_revision
+// unconditionally on every call it makes, rollback included.
+func TestSnapshotRevisionMonotonicAcrossRollback(t *testing.T) {
+	router, cookie, _ := seededRouter(t)
+
+	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	if projRec.Code != http.StatusCreated {
+		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
+	}
+	var proj map[string]any
+	_ = json.NewDecoder(projRec.Body).Decode(&proj)
+	projectID, _ := proj["id"].(string)
+
+	schemaBody := `{"fields":[{"name":"maxRetries","type":"int","required":true,"max":10}]}`
+	if rec := put(router, "/v1/projects/"+projectID+"/schema", schemaBody, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put schema = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	envRec := post(router, "/v1/projects/"+projectID+"/environments", `{"name":"staging"}`, cookie)
+	if envRec.Code != http.StatusCreated {
+		t.Fatalf("create env = %d, want 201, body=%s", envRec.Code, envRec.Body.String())
+	}
+	var env map[string]any
+	_ = json.NewDecoder(envRec.Body).Decode(&env)
+	envID, _ := env["id"].(string)
+
+	keyRec := post(router, "/v1/environments/"+envID+"/api-keys", `{"name":"sdk"}`, cookie)
+	if keyRec.Code != http.StatusCreated {
+		t.Fatalf("create key = %d, want 201, body=%s", keyRec.Code, keyRec.Body.String())
+	}
+	var keyBody map[string]any
+	_ = json.NewDecoder(keyRec.Body).Decode(&keyBody)
+	key, _ := keyBody["key"].(string)
+
+	// Version 1.
+	if rec := put(router, "/v1/environments/"+envID+"/values", `{"values":{"maxRetries":3}}`, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put values v1 = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	// Version 2 — bumps the delivery revision again.
+	if rec := put(router, "/v1/environments/"+envID+"/values", `{"values":{"maxRetries":4}}`, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put values v2 = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	snapAtV2Rec := bearer(router, "/v1/snapshot", key)
+	if snapAtV2Rec.Code != http.StatusOK {
+		t.Fatalf("snapshot at v2 = %d, want 200, body=%s", snapAtV2Rec.Code, snapAtV2Rec.Body.String())
+	}
+	var snapAtV2 map[string]any
+	_ = json.NewDecoder(snapAtV2Rec.Body).Decode(&snapAtV2)
+	if v, _ := snapAtV2["version"].(float64); v != 2 {
+		t.Fatalf("snapshot at v2 version = %v, want 2", snapAtV2["version"])
+	}
+	revisionAtV2, _ := snapAtV2["revision"].(float64)
+	if revisionAtV2 <= 0 {
+		t.Fatalf("snapshot at v2 revision = %v, want > 0", snapAtV2["revision"])
+	}
+
+	// Roll back to version 1.
+	if rec := post(router, "/v1/environments/"+envID+"/rollback", `{"version":1}`, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("rollback = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	snapAfterRollbackRec := bearer(router, "/v1/snapshot", key)
+	if snapAfterRollbackRec.Code != http.StatusOK {
+		t.Fatalf("snapshot after rollback = %d, want 200, body=%s", snapAfterRollbackRec.Code, snapAfterRollbackRec.Body.String())
+	}
+	var snapAfterRollback map[string]any
+	_ = json.NewDecoder(snapAfterRollbackRec.Body).Decode(&snapAfterRollback)
+
+	// The user-facing version went backwards...
+	if v, _ := snapAfterRollback["version"].(float64); v != 1 {
+		t.Fatalf("snapshot after rollback version = %v, want 1", snapAfterRollback["version"])
+	}
+	// ...but the delivery revision, the axis SDKs actually dedupe/gate
+	// `since` on, must have kept climbing despite that.
+	revisionAfterRollback, _ := snapAfterRollback["revision"].(float64)
+	if revisionAfterRollback <= revisionAtV2 {
+		t.Fatalf("snapshot after rollback revision = %v, want > %v (revision at version 2) even though version went 2 -> 1",
+			revisionAfterRollback, revisionAtV2)
 	}
 }
 
