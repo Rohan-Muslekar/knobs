@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openStream } from "./stream.js";
-import type { Snapshot } from "./types.js";
+import type { Delta, Snapshot } from "./types.js";
 import { createControllableStream, type ControllableStream } from "./test/controllableStream.js";
 
 const ENDPOINT = "https://knobs.example.com";
@@ -39,7 +39,7 @@ function flush(): Promise<void> {
 }
 
 describe("openStream", () => {
-  it("requests the stream endpoint with since + bearer + accept headers", async () => {
+  it("requests the stream endpoint with since + deltas=1 + bearer + accept headers (useDeltas defaults true)", async () => {
     const controllable = createControllableStream();
     const requests = stubFetchWithStream(controllable);
 
@@ -48,13 +48,96 @@ describe("openStream", () => {
       42,
       vi.fn(),
       vi.fn(),
+      vi.fn(),
     );
     await flush();
 
     expect(requests).toHaveLength(1);
-    expect(requests[0].url).toBe(`${ENDPOINT}/v1/stream?since=42`);
+    expect(requests[0].url).toBe(`${ENDPOINT}/v1/stream?since=42&deltas=1`);
     expect(requests[0].headers.get("authorization")).toBe(`Bearer ${API_KEY}`);
     expect(requests[0].headers.get("accept")).toBe("text/event-stream");
+
+    cancel();
+    controllable.close();
+  });
+
+  it("omits deltas=1 when useDeltas is explicitly false", async () => {
+    const controllable = createControllableStream();
+    const requests = stubFetchWithStream(controllable);
+
+    const cancel = openStream(
+      { endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod", useDeltas: false },
+      42,
+      vi.fn(),
+      vi.fn(),
+      vi.fn(),
+    );
+    await flush();
+
+    expect(requests[0].url).toBe(`${ENDPOINT}/v1/stream?since=42`);
+
+    cancel();
+    controllable.close();
+  });
+
+  it("parses a data: frame with type:\"snapshot\" into onSnapshot (explicit type, same as bare)", async () => {
+    const controllable = createControllableStream();
+    stubFetchWithStream(controllable);
+    const onSnapshot = vi.fn();
+    const onDelta = vi.fn();
+    const onError = vi.fn();
+
+    const cancel = openStream(
+      { endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" },
+      0,
+      onSnapshot,
+      onDelta,
+      onError,
+    );
+
+    const snap = { type: "snapshot", version: 1, revision: 1, schemaHash: "h", values: { a: 1 } };
+    controllable.push(`data: ${JSON.stringify(snap)}\n\n`);
+    await flush();
+
+    expect(onSnapshot).toHaveBeenCalledTimes(1);
+    expect(onSnapshot).toHaveBeenCalledWith(snap);
+    expect(onDelta).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+
+    cancel();
+    controllable.close();
+  });
+
+  it("parses a data: frame with type:\"delta\" into onDelta, not onSnapshot", async () => {
+    const controllable = createControllableStream();
+    stubFetchWithStream(controllable);
+    const onSnapshot = vi.fn();
+    const onDelta = vi.fn();
+    const onError = vi.fn();
+
+    const cancel = openStream(
+      { endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" },
+      0,
+      onSnapshot,
+      onDelta,
+      onError,
+    );
+
+    const delta: Delta = {
+      type: "delta",
+      version: 1,
+      revision: 2,
+      from: 1,
+      schemaHash: "h",
+      values: { set: { a: 2 } },
+    };
+    controllable.push(`data: ${JSON.stringify(delta)}\n\n`);
+    await flush();
+
+    expect(onDelta).toHaveBeenCalledTimes(1);
+    expect(onDelta).toHaveBeenCalledWith(delta);
+    expect(onSnapshot).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
 
     cancel();
     controllable.close();
@@ -66,7 +149,7 @@ describe("openStream", () => {
     const onSnapshot = vi.fn();
     const onError = vi.fn();
 
-    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, onError);
+    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, vi.fn(), onError);
 
     const snap: Snapshot = { version: 1, revision: 1, schemaHash: "h", values: { a: 1 } };
     controllable.push(`data: ${JSON.stringify(snap)}\n\n`);
@@ -86,7 +169,7 @@ describe("openStream", () => {
     const onSnapshot = vi.fn();
     const onError = vi.fn();
 
-    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, onError);
+    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, vi.fn(), onError);
 
     controllable.push(": heartbeat\n\n");
     await flush();
@@ -112,7 +195,7 @@ describe("openStream", () => {
     const onSnapshot = vi.fn();
     const onError = vi.fn();
 
-    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, onError);
+    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, vi.fn(), onError);
 
     const snap: Snapshot = { version: 3, revision: 3, schemaHash: "h", values: { split: "frame" } };
     const full = `data: ${JSON.stringify(snap)}\n\n`;
@@ -139,7 +222,7 @@ describe("openStream", () => {
     const onSnapshot = vi.fn();
     const onError = vi.fn();
 
-    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, onError);
+    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, vi.fn(), onError);
 
     const before: Snapshot = { version: 1, revision: 1, schemaHash: "h", values: { before: true } };
     controllable.push(`data: ${JSON.stringify(before)}\n\n`);
@@ -165,7 +248,7 @@ describe("openStream", () => {
     const onSnapshot = vi.fn();
     const onError = vi.fn();
 
-    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, onError);
+    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, vi.fn(), onError);
     await flush();
 
     expect(onError).toHaveBeenCalledTimes(1);
@@ -180,7 +263,7 @@ describe("openStream", () => {
     const onSnapshot = vi.fn();
     const onError = vi.fn();
 
-    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, onError);
+    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, vi.fn(), onError);
 
     controllable.push("data: {not valid json\n\n");
     await flush();
@@ -213,7 +296,7 @@ describe("openStream", () => {
       callOrder.push(controllable.cancelled ? "aborted-then-onError" : "onError-before-abort");
     });
 
-    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, onError);
+    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, vi.fn(), onError);
 
     expect(controllable.cancelled).toBe(false);
 
@@ -234,7 +317,7 @@ describe("openStream", () => {
     const onSnapshot = vi.fn();
     const onError = vi.fn();
 
-    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, onError);
+    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, vi.fn(), onError);
     controllable.close();
     await flush();
 

@@ -15,29 +15,44 @@ import (
 // config could legitimately trip it, so it's raised well past that.
 const maxSSELineLength = 1024 * 1024 // 1MB
 
-// stream opens the SSE live-update connection at GET {endpoint}/v1/stream?since={since}
-// and hands every well-formed snapshot frame to onSnapshot until the
-// connection ends.
+// frameEnvelope is unmarshalled first from every SSE data frame just to peek
+// its "type" discriminator, before deciding whether to parse the frame as a
+// Delta or a Snapshot.
+type frameEnvelope struct {
+	Type string `json:"type"`
+}
+
+// stream opens the SSE live-update connection at
+// GET {endpoint}/v1/stream?since={since} (with "&deltas=1" appended when
+// useDeltas is true) and hands every well-formed frame to onSnapshot or
+// onDelta until the connection ends.
 //
 // Framing follows the SSE text format the delivery API speaks: a blank line
 // ends an event, a line starting with ":" is a comment (the server's
 // periodic heartbeat keepalive) and is ignored, and "data:" lines carry the
-// JSON snapshot — possibly split across more than one "data:" line, in which
-// case they're joined with "\n" before parsing, matching the TS SDK. A frame
-// whose data doesn't unmarshal into a Snapshot is skipped rather than
-// treated as fatal, since one bad frame shouldn't take down a long-lived
-// connection. (This is a deliberate divergence from the TS SDK, which aborts
-// and reconnects on a malformed frame; here we keep reading, on the view that
-// a single corrupt event is more likely transient than a poisoned stream.)
+// JSON frame — possibly split across more than one "data:" line, in which
+// case they're joined with "\n" before parsing, matching the TS SDK. Each
+// frame's "type" field is peeked first: "delta" is parsed as a Delta and
+// handed to onDelta; "snapshot", or no "type" at all (an older, non-delta
+// server), is parsed as a Snapshot and handed to onSnapshot. A frame whose
+// data doesn't unmarshal into the shape its type calls for is skipped
+// rather than treated as fatal, since one bad frame shouldn't take down a
+// long-lived connection. (This is a deliberate divergence from the TS SDK,
+// which aborts and reconnects on a malformed frame; here we keep reading,
+// on the view that a single corrupt event is more likely transient than a
+// poisoned stream.)
 //
 // The request is built with http.NewRequestWithContext, so cancelling ctx
 // aborts the underlying connection and unblocks the read loop — stream then
 // returns nil rather than surfacing ctx.Err() as a real failure, since a
 // cancelled stream isn't an error condition for the caller (Close, or a
 // context that the caller owns and controls the lifetime of).
-func stream(ctx context.Context, opts Options, since int64, onSnapshot func(Snapshot)) error {
+func stream(ctx context.Context, opts Options, since int64, useDeltas bool, onSnapshot func(Snapshot), onDelta func(Delta)) error {
 	base := strings.TrimRight(opts.Endpoint, "/")
 	url := fmt.Sprintf("%s/v1/stream?since=%d", base, since)
+	if useDeltas {
+		url += "&deltas=1"
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -77,9 +92,23 @@ func stream(ctx context.Context, opts Options, since int64, onSnapshot func(Snap
 			// accumulated (if any — a heartbeat-only frame has none) and reset
 			// for the next one.
 			if len(dataLines) > 0 {
-				var snap Snapshot
-				if err := json.Unmarshal([]byte(strings.Join(dataLines, "\n")), &snap); err == nil {
-					onSnapshot(snap)
+				raw := []byte(strings.Join(dataLines, "\n"))
+
+				var env frameEnvelope
+				if err := json.Unmarshal(raw, &env); err == nil {
+					if env.Type == "delta" {
+						var d Delta
+						if err := json.Unmarshal(raw, &d); err == nil {
+							onDelta(d)
+						}
+					} else {
+						// "snapshot", or no "type" at all — a bare frame
+						// from a server that doesn't speak delta mode.
+						var snap Snapshot
+						if err := json.Unmarshal(raw, &snap); err == nil {
+							onSnapshot(snap)
+						}
+					}
 				}
 				dataLines = dataLines[:0]
 			}

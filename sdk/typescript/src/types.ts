@@ -53,6 +53,42 @@ export interface EvalContext {
   attributes?: Record<string, unknown>;
 }
 
+/**
+ * An incremental change to one field-map (either `values` or `targeting`) carried by a
+ * Delta frame. Both `set` and `remove` are omitted by the server when there's nothing to
+ * say on that side — an absent `set`/`remove` means "no keys added/changed" / "no keys
+ * removed" respectively, not "unknown."
+ */
+export interface FieldDelta<T = unknown> {
+  /** Keys that were added or changed, keyed by name. */
+  set?: Record<string, T>;
+  /** Keys that were removed. */
+  remove?: string[];
+}
+
+/** A FieldDelta specialized for per-key targeting rules. */
+export type TargetingDelta = FieldDelta<Rule[]>;
+
+/**
+ * An incremental update sent on the SSE stream in place of a full Snapshot. Only valid to
+ * apply on top of a Snapshot whose `revision` equals `from` — see `applyDelta` in delta.ts.
+ */
+export interface Delta {
+  type: "delta";
+  /** The config version this delta was built from (can decrease on rollback). */
+  version: number;
+  /** The delivery revision this delta produces once applied. */
+  revision: number;
+  /** The revision this delta must be applied on top of — i.e. the client's `current.revision`. */
+  from: number;
+  /** Hash of the schema definition the resulting values were validated against. */
+  schemaHash: string;
+  /** Incremental change to the resolved key/value config. Absent when values didn't change. */
+  values?: FieldDelta;
+  /** Incremental change to per-key targeting rules. Absent when targeting didn't change. */
+  targeting?: TargetingDelta;
+}
+
 /** Options for constructing a Knobs SDK client. */
 export interface KnobsOptions {
   /** Base URL of the Knobs delivery API, e.g. "https://knobs.example.com". */
@@ -65,6 +101,8 @@ export interface KnobsOptions {
   pollIntervalMs?: number;
   /** The schemaHash the consuming code was generated against. Mismatch on first load logs a warning. */
   expectedSchemaHash?: string;
+  /** Request incremental delta frames on the SSE stream (`?deltas=1`) instead of full snapshots each time. Default true. */
+  useDeltas?: boolean;
 }
 
 /** A live, in-memory view of a Knobs environment's config. */
