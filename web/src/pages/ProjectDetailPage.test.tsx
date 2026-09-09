@@ -36,6 +36,15 @@ describe("ProjectDetailPage", () => {
     await waitFor(() => expect(screen.getByText("Acme")).toBeInTheDocument());
     expect(screen.getByText("production")).toBeInTheDocument();
     expect(screen.getByText("staging")).toBeInTheDocument();
+
+    const configureLinks = screen.getAllByRole("link", { name: /configure/i });
+    expect(configureLinks).toHaveLength(2);
+    expect(configureLinks[0]).toHaveAttribute("href", "/environments/e1");
+    expect(configureLinks[1]).toHaveAttribute("href", "/environments/e2");
+    configureLinks.forEach((link) => expect(link).not.toHaveAttribute("aria-disabled"));
+
+    expect(screen.getByRole("link", { name: /edit schema/i })).toHaveAttribute("href", "/projects/p1/schema");
+    expect(screen.getByRole("link", { name: /audit log/i })).toHaveAttribute("href", "/projects/p1/audit");
   });
 
   it("creates an environment and the new row appears after refetch", async () => {
