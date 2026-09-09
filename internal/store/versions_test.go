@@ -5,11 +5,13 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/Rohan-Muslekar/knobs/internal/store"
+	"github.com/Rohan-Muslekar/knobs/internal/targeting"
 )
 
 func TestVersionsLifecycle(t *testing.T) {
@@ -36,7 +38,7 @@ func TestVersionsLifecycle(t *testing.T) {
 		t.Fatalf("next version (fresh env) = %d, want 1", n)
 	}
 
-	v1, err := repo.InsertVersion(ctx, repo.Pool(), env.ID, n, 1, map[string]any{"maxRetries": float64(3)}, uuid.Nil)
+	v1, err := repo.InsertVersion(ctx, repo.Pool(), env.ID, n, 1, map[string]any{"maxRetries": float64(3)}, nil, uuid.Nil)
 	if err != nil {
 		t.Fatalf("insert v1: %v", err)
 	}
@@ -73,7 +75,7 @@ func TestVersionsLifecycle(t *testing.T) {
 		t.Fatalf("next version (after v1) = %d, want 2", n2)
 	}
 
-	v2, err := repo.InsertVersion(ctx, repo.Pool(), env.ID, n2, 1, map[string]any{"maxRetries": float64(4)}, uuid.Nil)
+	v2, err := repo.InsertVersion(ctx, repo.Pool(), env.ID, n2, 1, map[string]any{"maxRetries": float64(4)}, nil, uuid.Nil)
 	if err != nil {
 		t.Fatalf("insert v2: %v", err)
 	}
@@ -161,5 +163,93 @@ func TestVersionsLifecycle(t *testing.T) {
 	}
 	if versionsAfterRollback[1].Version != 1 || !versionsAfterRollback[1].IsCurrent {
 		t.Fatalf("versionsAfterRollback[1] = %+v, want version 1, current", versionsAfterRollback[1])
+	}
+}
+
+// TestVersionTargetingRoundTrip verifies targeting rules stored on a
+// config_version survive the jsonb round trip through both read paths:
+// CurrentVersion (joined through environment.current_version_id) and
+// VersionByNumber (read directly by environment+version).
+func TestVersionTargetingRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	repo := store.New(migratedPool(t))
+
+	p, err := repo.CreateProject(ctx, repo.Pool(), "Acme", "acme")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	env, err := repo.CreateEnvironment(ctx, repo.Pool(), p.ID, "staging")
+	if err != nil {
+		t.Fatalf("create environment: %v", err)
+	}
+	if _, err := repo.GetOrInitSchema(ctx, repo.Pool(), p.ID); err != nil {
+		t.Fatalf("init schema: %v", err)
+	}
+
+	n, err := repo.NextVersionNumber(ctx, repo.Pool(), env.ID)
+	if err != nil {
+		t.Fatalf("next version: %v", err)
+	}
+
+	tgt := targeting.Map{
+		"maxRetries": []targeting.Rule{
+			{
+				Conditions: []targeting.Condition{
+					{Attribute: "plan", Operator: targeting.OpEq, Values: []any{"enterprise"}},
+				},
+				Value: float64(10),
+			},
+			{
+				Rollout: &targeting.Rollout{
+					Salt: "maxRetries",
+					Variants: []targeting.Variant{
+						{Value: float64(3), Weight: 50},
+						{Value: float64(5), Weight: 50},
+					},
+				},
+			},
+		},
+	}
+
+	v1, err := repo.InsertVersion(ctx, repo.Pool(), env.ID, n, 1, map[string]any{"maxRetries": float64(3)}, tgt, uuid.Nil)
+	if err != nil {
+		t.Fatalf("insert version with targeting: %v", err)
+	}
+	if !reflect.DeepEqual(v1.Targeting, tgt) {
+		t.Fatalf("InsertVersion returned targeting = %+v, want %+v", v1.Targeting, tgt)
+	}
+
+	if _, err := repo.SetCurrentVersion(ctx, repo.Pool(), env.ID, v1.ID); err != nil {
+		t.Fatalf("set current: %v", err)
+	}
+
+	cur, err := repo.CurrentVersion(ctx, repo.Pool(), env.ID)
+	if err != nil {
+		t.Fatalf("current version: %v", err)
+	}
+	if !reflect.DeepEqual(cur.Targeting, tgt) {
+		t.Fatalf("CurrentVersion targeting = %+v, want %+v", cur.Targeting, tgt)
+	}
+
+	byNum, err := repo.VersionByNumber(ctx, repo.Pool(), env.ID, n)
+	if err != nil {
+		t.Fatalf("version by number: %v", err)
+	}
+	if !reflect.DeepEqual(byNum.Targeting, tgt) {
+		t.Fatalf("VersionByNumber targeting = %+v, want %+v", byNum.Targeting, tgt)
+	}
+
+	// An empty/nil targeting map round-trips as an empty (non-nil) Map, not
+	// as a JSON null that would fail to unmarshal.
+	n2, err := repo.NextVersionNumber(ctx, repo.Pool(), env.ID)
+	if err != nil {
+		t.Fatalf("next version (2): %v", err)
+	}
+	v2, err := repo.InsertVersion(ctx, repo.Pool(), env.ID, n2, 1, map[string]any{"maxRetries": float64(4)}, nil, uuid.Nil)
+	if err != nil {
+		t.Fatalf("insert version without targeting: %v", err)
+	}
+	if len(v2.Targeting) != 0 {
+		t.Fatalf("v2.Targeting = %+v, want empty", v2.Targeting)
 	}
 }

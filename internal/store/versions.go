@@ -8,6 +8,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/Rohan-Muslekar/knobs/internal/targeting"
 )
 
 // ConfigVersion is a single immutable snapshot of an environment's config
@@ -18,6 +20,7 @@ type ConfigVersion struct {
 	Version       int
 	SchemaVersion int
 	Values        map[string]any
+	Targeting     targeting.Map
 	CreatedBy     *uuid.UUID
 	CreatedAt     time.Time
 }
@@ -27,13 +30,13 @@ type ConfigVersion struct {
 // when the environment has no current version (current_version_id is nil).
 func (r *Repo) CurrentVersion(ctx context.Context, db DBTX, envID uuid.UUID) (ConfigVersion, error) {
 	var v ConfigVersion
-	var raw []byte
+	var raw, traw []byte
 	err := db.QueryRow(ctx,
-		`SELECT cv.id, cv.environment_id, cv.version, cv.schema_version, cv.values, cv.created_by, cv.created_at
+		`SELECT cv.id, cv.environment_id, cv.version, cv.schema_version, cv.values, cv.targeting, cv.created_by, cv.created_at
 		 FROM environment e
 		 JOIN config_version cv ON cv.id = e.current_version_id
 		 WHERE e.id = $1`, envID,
-	).Scan(&v.ID, &v.EnvironmentID, &v.Version, &v.SchemaVersion, &raw, &v.CreatedBy, &v.CreatedAt)
+	).Scan(&v.ID, &v.EnvironmentID, &v.Version, &v.SchemaVersion, &raw, &traw, &v.CreatedBy, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ConfigVersion{}, ErrNotFound
 	}
@@ -41,6 +44,9 @@ func (r *Repo) CurrentVersion(ctx context.Context, db DBTX, envID uuid.UUID) (Co
 		return ConfigVersion{}, err
 	}
 	if err := json.Unmarshal(raw, &v.Values); err != nil {
+		return ConfigVersion{}, err
+	}
+	if err := json.Unmarshal(traw, &v.Targeting); err != nil {
 		return ConfigVersion{}, err
 	}
 	return v, nil
@@ -61,8 +67,15 @@ func (r *Repo) NextVersionNumber(ctx context.Context, tx DBTX, envID uuid.UUID) 
 // InsertVersion creates a new immutable config_version row for envID.
 // Existing rows are never updated or deleted, so once written a version's
 // values are permanent history. createdBy of uuid.Nil is stored as NULL.
-func (r *Repo) InsertVersion(ctx context.Context, tx DBTX, envID uuid.UUID, version, schemaVersion int, values map[string]any, createdBy uuid.UUID) (ConfigVersion, error) {
+func (r *Repo) InsertVersion(ctx context.Context, tx DBTX, envID uuid.UUID, version, schemaVersion int, values map[string]any, tgt targeting.Map, createdBy uuid.UUID) (ConfigVersion, error) {
 	raw, err := json.Marshal(values)
+	if err != nil {
+		return ConfigVersion{}, err
+	}
+	if tgt == nil {
+		tgt = targeting.Map{}
+	}
+	traw, err := json.Marshal(tgt)
 	if err != nil {
 		return ConfigVersion{}, err
 	}
@@ -71,17 +84,20 @@ func (r *Repo) InsertVersion(ctx context.Context, tx DBTX, envID uuid.UUID, vers
 		cb = &createdBy
 	}
 	var v ConfigVersion
-	var vraw []byte
+	var vraw, vtraw []byte
 	err = tx.QueryRow(ctx,
-		`INSERT INTO config_version (environment_id, version, values, schema_version, created_by)
-		 VALUES ($1, $2, $3, $4, $5)
-		 RETURNING id, environment_id, version, schema_version, values, created_by, created_at`,
-		envID, version, raw, schemaVersion, cb,
-	).Scan(&v.ID, &v.EnvironmentID, &v.Version, &v.SchemaVersion, &vraw, &v.CreatedBy, &v.CreatedAt)
+		`INSERT INTO config_version (environment_id, version, values, targeting, schema_version, created_by)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 RETURNING id, environment_id, version, schema_version, values, targeting, created_by, created_at`,
+		envID, version, raw, traw, schemaVersion, cb,
+	).Scan(&v.ID, &v.EnvironmentID, &v.Version, &v.SchemaVersion, &vraw, &vtraw, &v.CreatedBy, &v.CreatedAt)
 	if err != nil {
 		return ConfigVersion{}, err
 	}
 	if err := json.Unmarshal(vraw, &v.Values); err != nil {
+		return ConfigVersion{}, err
+	}
+	if err := json.Unmarshal(vtraw, &v.Targeting); err != nil {
 		return ConfigVersion{}, err
 	}
 	return v, nil
@@ -149,12 +165,12 @@ func (r *Repo) ListVersions(ctx context.Context, db DBTX, envID uuid.UUID) ([]Co
 // current version. Returns ErrNotFound when no such version exists.
 func (r *Repo) VersionByNumber(ctx context.Context, db DBTX, envID uuid.UUID, version int) (ConfigVersion, error) {
 	var v ConfigVersion
-	var raw []byte
+	var raw, traw []byte
 	err := db.QueryRow(ctx,
-		`SELECT id, environment_id, version, schema_version, values, created_by, created_at
+		`SELECT id, environment_id, version, schema_version, values, targeting, created_by, created_at
 		 FROM config_version WHERE environment_id = $1 AND version = $2`,
 		envID, version,
-	).Scan(&v.ID, &v.EnvironmentID, &v.Version, &v.SchemaVersion, &raw, &v.CreatedBy, &v.CreatedAt)
+	).Scan(&v.ID, &v.EnvironmentID, &v.Version, &v.SchemaVersion, &raw, &traw, &v.CreatedBy, &v.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ConfigVersion{}, ErrNotFound
 	}
@@ -162,6 +178,9 @@ func (r *Repo) VersionByNumber(ctx context.Context, db DBTX, envID uuid.UUID, ve
 		return ConfigVersion{}, err
 	}
 	if err := json.Unmarshal(raw, &v.Values); err != nil {
+		return ConfigVersion{}, err
+	}
+	if err := json.Unmarshal(traw, &v.Targeting); err != nil {
 		return ConfigVersion{}, err
 	}
 	return v, nil

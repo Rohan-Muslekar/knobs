@@ -143,3 +143,155 @@ func TestValuesAPI(t *testing.T) {
 		t.Fatalf("put tighter schema against live value 3 = %d, want 409, body=%s", conflictRec.Code, conflictRec.Body.String())
 	}
 }
+
+// TestValuesAPI_Targeting exercises targeting end to end: a PUT carrying
+// targeting rules must validate them (rejecting a rule against an unknown
+// field with 422), persist them alongside the values, surface them from
+// GET /v1/values, ride along in /v1/snapshot, and — on rollback — restore
+// whichever version's targeting the rollback lands on rather than leaking
+// the targeting from the version that was current before the rollback.
+func TestValuesAPI_Targeting(t *testing.T) {
+	router, cookie, _ := seededRouter(t)
+
+	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	if projRec.Code != http.StatusCreated {
+		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
+	}
+	var proj map[string]any
+	_ = json.NewDecoder(projRec.Body).Decode(&proj)
+	projectID, _ := proj["id"].(string)
+
+	schemaBody := `{"fields":[{"name":"maxRetries","type":"int","required":true,"max":10}]}`
+	if rec := put(router, "/v1/projects/"+projectID+"/schema", schemaBody, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put schema = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	envRec := post(router, "/v1/projects/"+projectID+"/environments", `{"name":"staging"}`, cookie)
+	if envRec.Code != http.StatusCreated {
+		t.Fatalf("create env = %d, want 201, body=%s", envRec.Code, envRec.Body.String())
+	}
+	var env map[string]any
+	_ = json.NewDecoder(envRec.Body).Decode(&env)
+	envID, _ := env["id"].(string)
+
+	// Targeting against a field that doesn't exist in the schema is
+	// rejected with 422, before any version is created — same treatment
+	// as a bad value.
+	badTargetingBody := `{"values":{"maxRetries":3},"targeting":{"noSuchField":[{"value":1}]}}`
+	if rec := put(router, "/v1/environments/"+envID+"/values", badTargetingBody, cookie); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("put bad targeting = %d, want 422, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Version 1: values + targeting rules.
+	v1Body := `{"values":{"maxRetries":3},"targeting":{"maxRetries":[{"value":5}]}}`
+	putRec1 := put(router, "/v1/environments/"+envID+"/values", v1Body, cookie)
+	if putRec1.Code != http.StatusOK {
+		t.Fatalf("put v1 = %d, want 200, body=%s", putRec1.Code, putRec1.Body.String())
+	}
+	var v1 map[string]any
+	_ = json.NewDecoder(putRec1.Body).Decode(&v1)
+	if v, _ := v1["version"].(float64); v != 1 {
+		t.Fatalf("put v1 version = %v, want 1", v1["version"])
+	}
+	assertTargetingHasMaxRetriesValue(t, v1["targeting"], 5)
+
+	// GET values returns the same targeting.
+	getRec1 := get(router, "/v1/environments/"+envID+"/values", cookie)
+	if getRec1.Code != http.StatusOK {
+		t.Fatalf("get v1 = %d, want 200, body=%s", getRec1.Code, getRec1.Body.String())
+	}
+	var got1 map[string]any
+	_ = json.NewDecoder(getRec1.Body).Decode(&got1)
+	assertTargetingHasMaxRetriesValue(t, got1["targeting"], 5)
+
+	// /v1/snapshot (delivery surface, API-key auth) includes targeting too.
+	keyRec := post(router, "/v1/environments/"+envID+"/api-keys", `{"name":"sdk"}`, cookie)
+	if keyRec.Code != http.StatusCreated {
+		t.Fatalf("create key = %d, want 201, body=%s", keyRec.Code, keyRec.Body.String())
+	}
+	var keyBody map[string]any
+	_ = json.NewDecoder(keyRec.Body).Decode(&keyBody)
+	key, _ := keyBody["key"].(string)
+	if key == "" {
+		t.Fatal("no plaintext key returned")
+	}
+
+	snapRec1 := bearer(router, "/v1/snapshot", key)
+	if snapRec1.Code != http.StatusOK {
+		t.Fatalf("snapshot v1 = %d, want 200, body=%s", snapRec1.Code, snapRec1.Body.String())
+	}
+	var snap1 map[string]any
+	_ = json.NewDecoder(snapRec1.Body).Decode(&snap1)
+	assertTargetingHasMaxRetriesValue(t, snap1["targeting"], 5)
+
+	// Version 2: different values, different targeting.
+	v2Body := `{"values":{"maxRetries":4},"targeting":{"maxRetries":[{"value":9}]}}`
+	putRec2 := put(router, "/v1/environments/"+envID+"/values", v2Body, cookie)
+	if putRec2.Code != http.StatusOK {
+		t.Fatalf("put v2 = %d, want 200, body=%s", putRec2.Code, putRec2.Body.String())
+	}
+	var v2 map[string]any
+	_ = json.NewDecoder(putRec2.Body).Decode(&v2)
+	if v, _ := v2["version"].(float64); v != 2 {
+		t.Fatalf("put v2 version = %v, want 2", v2["version"])
+	}
+	assertTargetingHasMaxRetriesValue(t, v2["targeting"], 9)
+
+	snapRec2 := bearer(router, "/v1/snapshot", key)
+	if snapRec2.Code != http.StatusOK {
+		t.Fatalf("snapshot v2 = %d, want 200, body=%s", snapRec2.Code, snapRec2.Body.String())
+	}
+	var snap2 map[string]any
+	_ = json.NewDecoder(snapRec2.Body).Decode(&snap2)
+	assertTargetingHasMaxRetriesValue(t, snap2["targeting"], 9)
+
+	// Rollback to version 1 must restore v1's targeting, not v2's.
+	rollbackRec := post(router, "/v1/environments/"+envID+"/rollback", `{"version":1}`, cookie)
+	if rollbackRec.Code != http.StatusOK {
+		t.Fatalf("rollback = %d, want 200, body=%s", rollbackRec.Code, rollbackRec.Body.String())
+	}
+	var rollbackBody map[string]any
+	_ = json.NewDecoder(rollbackRec.Body).Decode(&rollbackBody)
+	if v, _ := rollbackBody["version"].(float64); v != 1 {
+		t.Fatalf("rollback response version = %v, want 1", rollbackBody["version"])
+	}
+	assertTargetingHasMaxRetriesValue(t, rollbackBody["targeting"], 5)
+
+	getRec3 := get(router, "/v1/environments/"+envID+"/values", cookie)
+	if getRec3.Code != http.StatusOK {
+		t.Fatalf("get after rollback = %d, want 200, body=%s", getRec3.Code, getRec3.Body.String())
+	}
+	var got3 map[string]any
+	_ = json.NewDecoder(getRec3.Body).Decode(&got3)
+	assertTargetingHasMaxRetriesValue(t, got3["targeting"], 5)
+
+	snapRec3 := bearer(router, "/v1/snapshot", key)
+	if snapRec3.Code != http.StatusOK {
+		t.Fatalf("snapshot after rollback = %d, want 200, body=%s", snapRec3.Code, snapRec3.Body.String())
+	}
+	var snap3 map[string]any
+	_ = json.NewDecoder(snapRec3.Body).Decode(&snap3)
+	assertTargetingHasMaxRetriesValue(t, snap3["targeting"], 5)
+}
+
+// assertTargetingHasMaxRetriesValue checks that raw decodes as
+// {"maxRetries": [{"value": want, ...}, ...]} — the shape targeting.Map
+// takes over the wire.
+func assertTargetingHasMaxRetriesValue(t *testing.T, raw any, want float64) {
+	t.Helper()
+	m, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("targeting = %v (%T), want a map", raw, raw)
+	}
+	rules, ok := m["maxRetries"].([]any)
+	if !ok || len(rules) == 0 {
+		t.Fatalf("targeting[maxRetries] = %v, want a non-empty rule list", m["maxRetries"])
+	}
+	rule, ok := rules[0].(map[string]any)
+	if !ok {
+		t.Fatalf("targeting[maxRetries][0] = %v, want a rule object", rules[0])
+	}
+	if got, _ := rule["value"].(float64); got != want {
+		t.Fatalf("targeting[maxRetries][0].value = %v, want %v", rule["value"], want)
+	}
+}

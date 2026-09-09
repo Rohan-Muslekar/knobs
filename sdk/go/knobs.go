@@ -41,11 +41,15 @@ type Snapshot struct {
 	SchemaHash string `json:"schemaHash"`
 	// Values is the resolved key/value config for the environment.
 	Values map[string]any `json:"values"`
+	// Targeting holds the targeting rules for each key, keyed by key name.
+	// GetFor and EvaluateAll evaluate these against a caller-supplied
+	// EvalContext; Get/GetAll ignore them entirely.
+	Targeting map[string][]Rule `json:"targeting"`
 }
 
 // emptySnapshot is what a Client holds when the server has no values for an
 // environment yet (a 404 from /v1/snapshot).
-var emptySnapshot = Snapshot{Values: map[string]any{}}
+var emptySnapshot = Snapshot{Values: map[string]any{}, Targeting: map[string][]Rule{}}
 
 // Options configures a Client.
 type Options struct {
@@ -239,6 +243,9 @@ func (c *Client) setSnapshot(snap Snapshot) {
 	if snap.Values == nil {
 		snap.Values = map[string]any{}
 	}
+	if snap.Targeting == nil {
+		snap.Targeting = map[string][]Rule{}
+	}
 	c.mu.Lock()
 	c.current = snap
 	c.mu.Unlock()
@@ -266,6 +273,9 @@ func (c *Client) currentRevision() int64 {
 func (c *Client) applySnapshot(snap Snapshot) {
 	if snap.Values == nil {
 		snap.Values = map[string]any{}
+	}
+	if snap.Targeting == nil {
+		snap.Targeting = map[string][]Rule{}
 	}
 
 	c.mu.Lock()
