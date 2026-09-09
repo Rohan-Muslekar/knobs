@@ -1,7 +1,8 @@
+import { applyDelta, canApplyDelta } from "./delta.js";
 import { resolve, resolveAll } from "./eval.js";
 import { fetchSnapshot } from "./http.js";
 import { openStream } from "./stream.js";
-import type { EvalContext, KnobsClient, KnobsOptions, Snapshot } from "./types.js";
+import type { Delta, EvalContext, KnobsClient, KnobsOptions, Snapshot } from "./types.js";
 
 const EMPTY_SNAPSHOT: Snapshot = { version: 0, revision: 0, schemaHash: "", values: {} };
 
@@ -14,8 +15,9 @@ const MAX_RECONNECT_DELAY_MS = 30_000;
 /**
  * Creates a Knobs SDK client: fetches the initial snapshot, holds it in memory for
  * zero-network `get`/`getAll` reads, then keeps it live via an SSE stream (with
- * reconnect-with-backoff) and a slow-poll fallback. Every update path — the stream, a
- * reconnect's resend, and the poll fallback — funnels through the same revision gate: a
+ * reconnect-with-backoff) and a slow-poll fallback. Every update path — a full snapshot
+ * (from the stream, a reconnect's resend, a delta's full resync, or the poll fallback), and
+ * a delta folded onto `current` via `applyDelta` — funnels through the same revision gate: a
  * snapshot only swaps in if its `revision` is strictly greater than the current one, so a
  * stale replay (equal/lower revision) is ignored while a rollback (which carries a HIGHER
  * revision even though its `version` went down) still applies.
@@ -69,10 +71,38 @@ export function createClient(opts: KnobsOptions): KnobsClient {
         reconnectDelay = INITIAL_RECONNECT_DELAY_MS; // a healthy frame resets the backoff
         applySnapshot(snapshot);
       },
+      (delta) => {
+        reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
+        applyDeltaFrame(delta);
+      },
       () => {
         scheduleReconnect();
       },
     );
+  }
+
+  // Applies a delta frame. When it chains cleanly onto `current` (from === current.revision),
+  // folds it into a new snapshot and runs that through the exact same revision-gate +
+  // listener-notify path (`applySnapshot`) a full snapshot goes through. Otherwise — defensive;
+  // shouldn't normally happen (a dropped frame, or a stream frame racing a reconnect) — falls
+  // back to a full resync: refetch a full snapshot via the existing fetchSnapshot and apply it.
+  function applyDeltaFrame(delta: Delta): void {
+    if (canApplyDelta(current, delta)) {
+      applySnapshot(applyDelta(current, delta));
+      return;
+    }
+
+    fetchSnapshot(opts)
+      .then((snapshot) => {
+        if (closed || snapshot === null) return;
+        applySnapshot(snapshot);
+      })
+      .catch(() => {
+        // Best-effort: same rationale as the poll fallback's catch below — the stream keeps
+        // running (a later delta may resync cleanly, or the next one triggers another resync
+        // attempt) and the slow-poll fallback will eventually catch this environment up, so a
+        // transient resync failure isn't worth surfacing on its own.
+      });
   }
 
   function scheduleReconnect(): void {
