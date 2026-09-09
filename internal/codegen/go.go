@@ -123,6 +123,16 @@ func jsonTagLiteral(fieldName string) string {
 // a duplicate field name parses fine and only fails at the *consumer's*
 // `go build`). That collision is checked explicitly below instead, by
 // tracking derived identifiers as they're emitted.
+// EmitGo renders a schema definition as a Go source file: a Config struct plus
+// a Typed helper that unmarshals a client's snapshot into it.
+//
+// Field.Required is intentionally not encoded in the generated struct — unlike
+// the TS emitter's optional `field?:`. Every Go field is a plain value type, so
+// a key missing from the snapshot decodes to the type's zero value. Requiredness
+// is a server-side schema/validation concern (a snapshot that passed validation
+// already has every required field); the generated Go type is a decode target,
+// not a validator, so a pointer-per-optional-field would add nil-checks without
+// buying safety.
 func EmitGo(def schema.Definition, schemaHash, pkg string) (string, error) {
 	var b strings.Builder
 

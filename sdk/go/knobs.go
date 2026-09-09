@@ -125,6 +125,13 @@ func New(opts Options) *Client {
 // with an empty snapshot. If Options.ExpectedSchemaHash is set and a real
 // (non-404) snapshot's SchemaHash differs, it logs a warning via the
 // configured Logger (at most once per distinct hash).
+//
+// On a non-404 fetch error (network/5xx/auth), Ready returns that error and
+// does NOT start the background work — so the Client is not live and the
+// caller should retry Ready. This differs from the TS SDK, which never
+// rejects and always starts streaming; the Go SDK makes the first fetch a
+// hard gate so a misconfigured endpoint/key surfaces at startup instead of
+// silently serving an empty snapshot.
 func (c *Client) Ready(ctx context.Context) error {
 	snap, err := fetchSnapshot(ctx, c.opts, 0)
 	if err != nil {
