@@ -54,6 +54,7 @@ client.Close() // stops streaming/reconnect/poll — safe to call more than once
 | `ExpectedSchemaHash`  | no       | The `schemaHash` your generated code was built against. A mismatch logs a warning via `Logger` (not an error) — see codegen below. |
 | `HTTPClient`          | no       | Defaults to `http.DefaultClient`. |
 | `Logger`              | no       | `*slog.Logger`; defaults to `slog.Default()`. |
+| `DisableDeltas`       | no       | Opts out of incremental delta frames on the stream (they're requested by default — the zero value keeps them on). See "Delta frames" below. |
 
 ### `Client`
 
@@ -66,6 +67,13 @@ client.Close() // stops streaming/reconnect/poll — safe to call more than once
 Updates are gated by the snapshot's `Revision`, not `Version`: a snapshot only replaces the current one if its
 revision is strictly higher, so a stale replay is ignored and a rollback (higher revision, lower version) still
 applies. Always compare/dedupe on `Revision` — never `Version` — if you're touching the internals.
+
+### Delta frames
+
+By default the client requests `?deltas=1` on the stream, so most updates arrive as a small
+set/remove diff instead of the full config. This is transparent to callers — `Get`/`GetAll`/`OnChange`
+behave the same either way — and it still works unmodified against a server that only ever sends full
+snapshots. Set `Options.DisableDeltas: true` to always request full snapshot frames instead.
 
 ## Codegen: typed config with `knobs gen`
 

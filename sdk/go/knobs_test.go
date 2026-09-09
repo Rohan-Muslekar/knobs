@@ -321,6 +321,123 @@ func TestStreamedRollbackHigherRevisionLowerVersionApplies(t *testing.T) {
 	}
 }
 
+func TestDeltaFrameUpdatesGetWhenFromMatches(t *testing.T) {
+	srv := newTestServer("")
+	defer srv.Close()
+	srv.setSnapshot(Snapshot{Version: 1, Revision: 1, Values: map[string]any{"foo": "bar", "kept": "yes"}})
+
+	c := New(Options{Endpoint: srv.URL, APIKey: "test-key", PollInterval: noPoll})
+	if err := c.Ready(testContext(t)); err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	defer c.Close()
+
+	changed := make(chan map[string]any, 1)
+	unsub := c.OnChange(func(values map[string]any) { changed <- values })
+	defer unsub()
+
+	ch := srv.waitForStreamConn(t)
+	sendFrame(t, ch, `data: {"type":"delta","version":2,"revision":2,"from":1,"schemaHash":"h1","values":{"set":{"foo":"baz"},"remove":["kept"]}}`+"\n\n")
+
+	select {
+	case values := <-changed:
+		if values["foo"] != "baz" {
+			t.Fatalf("OnChange values = %v, want foo=baz", values)
+		}
+		if _, ok := values["kept"]; ok {
+			t.Fatalf("OnChange values = %v, want %q removed", values, "kept")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for OnChange on a delta frame")
+	}
+
+	if v, ok := c.Get("foo"); !ok || v != "baz" {
+		t.Fatalf("Get(\"foo\") = (%v, %v), want (\"baz\", true) after applying the delta", v, ok)
+	}
+	if _, ok := c.Get("kept"); ok {
+		t.Fatal("Get(\"kept\") ok = true after a delta that removed it")
+	}
+}
+
+func TestSnapshotTypeFrameStillAppliesWhenDeltasEnabled(t *testing.T) {
+	srv := newTestServer("")
+	defer srv.Close()
+	srv.setSnapshot(Snapshot{Version: 1, Revision: 1, Values: map[string]any{"foo": "bar"}})
+
+	c := New(Options{Endpoint: srv.URL, APIKey: "test-key", PollInterval: noPoll})
+	if err := c.Ready(testContext(t)); err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	defer c.Close()
+
+	ch := srv.waitForStreamConn(t)
+	sendFrame(t, ch, `data: {"type":"snapshot","version":2,"revision":2,"schemaHash":"h1","values":{"foo":"baz"}}`+"\n\n")
+
+	waitForValue(t, c, "foo", "baz")
+}
+
+func TestBareFrameStillAppliesWhenDeltasEnabled(t *testing.T) {
+	srv := newTestServer("")
+	defer srv.Close()
+	srv.setSnapshot(Snapshot{Version: 1, Revision: 1, Values: map[string]any{"foo": "bar"}})
+
+	c := New(Options{Endpoint: srv.URL, APIKey: "test-key", PollInterval: noPoll})
+	if err := c.Ready(testContext(t)); err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	defer c.Close()
+
+	ch := srv.waitForStreamConn(t)
+	sendFrame(t, ch, `data: {"version":2,"revision":2,"schemaHash":"h1","values":{"foo":"baz"}}`+"\n\n")
+
+	waitForValue(t, c, "foo", "baz")
+}
+
+func TestDeltaFrameFromMismatchTriggersFullResync(t *testing.T) {
+	srv := newTestServer("")
+	defer srv.Close()
+	srv.setSnapshot(Snapshot{Version: 1, Revision: 1, Values: map[string]any{"foo": "bar"}})
+
+	c := New(Options{Endpoint: srv.URL, APIKey: "test-key", PollInterval: noPoll})
+	if err := c.Ready(testContext(t)); err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	defer c.Close()
+
+	hitsBeforeDelta := srv.snapshotHitCount()
+
+	// The server now has a newer snapshot the client hasn't seen — mirrors
+	// what a real server would have at the revision a resync fetches.
+	srv.setSnapshot(Snapshot{Version: 3, Revision: 50, Values: map[string]any{"foo": "resynced"}})
+
+	ch := srv.waitForStreamConn(t)
+	// from=99 can't chain onto the client's current revision (1) — this
+	// must trigger a full-snapshot refetch instead of applying nonsense.
+	sendFrame(t, ch, `data: {"type":"delta","version":4,"revision":51,"from":99,"schemaHash":"h1","values":{"set":{"foo":"should-not-apply-directly"}}}`+"\n\n")
+
+	waitForValue(t, c, "foo", "resynced")
+
+	if hits := srv.snapshotHitCount(); hits <= hitsBeforeDelta {
+		t.Errorf("snapshot endpoint hit count = %d, want more than %d (expected a resync fetch)", hits, hitsBeforeDelta)
+	}
+}
+
+// waitForValue polls c.Get(key) until it equals want or the deadline
+// passes, so a test doesn't race the async apply path (delta/resync happen
+// on the stream goroutine) with a single immediate read.
+func waitForValue(t *testing.T, c *Client, key string, want any) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if v, ok := c.Get(key); ok && v == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got, ok := c.Get(key)
+	t.Fatalf("Get(%q) = (%v, %v), want (%v, true) within the deadline", key, got, ok, want)
+}
+
 func TestCloseStopsStreamUpdatesAndReturnsPromptly(t *testing.T) {
 	srv := newTestServer("")
 	defer srv.Close()

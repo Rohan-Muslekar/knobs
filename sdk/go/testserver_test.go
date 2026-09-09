@@ -22,11 +22,13 @@ import (
 type testServer struct {
 	*httptest.Server
 
-	mu            sync.Mutex
-	snapshot      Snapshot
-	notFound      bool
-	lastAuth      string
-	unmatchedPath string
+	mu              sync.Mutex
+	snapshot        Snapshot
+	notFound        bool
+	lastAuth        string
+	unmatchedPath   string
+	lastStreamQuery string
+	snapshotHits    int
 
 	// streamConnReady receives a channel for every new /v1/stream connection,
 	// as soon as that connection's handler goroutine is up and blocked
@@ -63,6 +65,7 @@ func (ts *testServer) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	ts.mu.Lock()
 	ts.lastAuth = r.Header.Get("Authorization")
+	ts.lastStreamQuery = r.URL.RawQuery
 	ts.mu.Unlock()
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -124,6 +127,7 @@ func sendFrame(t *testing.T, ch chan string, data string) {
 func (ts *testServer) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	ts.mu.Lock()
 	ts.lastAuth = r.Header.Get("Authorization")
+	ts.snapshotHits++
 	notFound := ts.notFound
 	snap := ts.snapshot
 	ts.mu.Unlock()
@@ -168,6 +172,18 @@ func (ts *testServer) unmatched() string {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	return ts.unmatchedPath
+}
+
+func (ts *testServer) streamQuery() string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.lastStreamQuery
+}
+
+func (ts *testServer) snapshotHitCount() int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.snapshotHits
 }
 
 // testLogHandler is a slog.Handler that just records records in memory, so
