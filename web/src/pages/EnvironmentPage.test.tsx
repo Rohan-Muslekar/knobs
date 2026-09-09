@@ -156,6 +156,71 @@ describe("EnvironmentPage", () => {
     await waitFor(() => expect(saved).toEqual({ values: { tier: "silver" } }));
   });
 
+  it("shows the rolled-back value, not a stale edit, after rolling back a touched field", async () => {
+    // Regression test for the edits-masking bug: `edits` used to survive a
+    // rollback and keep overriding the freshly refetched server values.
+    let current = 2;
+    const valuesByVersion: Record<number, Record<string, unknown>> = {
+      1: { maxRetries: 3 },
+      2: { maxRetries: 5 },
+    };
+    let rollbackBody: { version: number } | null = null;
+
+    server.use(
+      envHandler,
+      http.get("/v1/projects/p1/schema", () =>
+        HttpResponse.json({
+          definition: { fields: [{ name: "maxRetries", type: "int", required: true }] },
+          schemaVersion: 1,
+        }),
+      ),
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: current, values: valuesByVersion[current], schemaVersion: 1 }),
+      ),
+      http.get("/v1/environments/e1/versions", () =>
+        HttpResponse.json([
+          {
+            id: "v2",
+            version: 2,
+            schemaVersion: 1,
+            createdBy: "alice",
+            createdAt: "2026-01-02T00:00:00Z",
+            isCurrent: current === 2,
+          },
+          {
+            id: "v1",
+            version: 1,
+            schemaVersion: 1,
+            createdBy: "alice",
+            createdAt: "2026-01-01T00:00:00Z",
+            isCurrent: current === 1,
+          },
+        ]),
+      ),
+      http.post("/v1/environments/e1/rollback", async ({ request }) => {
+        rollbackBody = (await request.json()) as { version: number };
+        current = rollbackBody.version;
+        return HttpResponse.json({ status: "ok" });
+      }),
+    );
+
+    renderEnvironmentPage();
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(5));
+
+    // Touch the field without saving, so `edits` is non-empty going into the rollback.
+    await userEvent.clear(screen.getByLabelText("maxRetries"));
+    await userEvent.type(screen.getByLabelText("maxRetries"), "99");
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(99));
+
+    await userEvent.click(screen.getByRole("button", { name: /roll back/i }));
+    expect(await screen.findByText(/roll back to version 1\?/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /confirm/i }));
+
+    await waitFor(() => expect(rollbackBody).toEqual({ version: 1 }));
+    // The rolled-back value (3) must win over the stale, never-saved edit (99).
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(3));
+  });
+
   it("blocks save on invalid JSON in a json field and never calls the API", async () => {
     let putCalled = false;
     server.use(

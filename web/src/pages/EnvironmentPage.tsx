@@ -70,7 +70,16 @@ export function EnvironmentPage() {
   );
 }
 
-function EnvironmentEditor({
+// Keyed on the current values version so a version change (save producing a
+// new version, or rollback resetting to a prior one) remounts the editor and
+// discards any local `edits` rather than mixing them with freshly refetched
+// server state.
+function EnvironmentEditor(props: { environmentId: string; projectId: string; environmentName: string }) {
+  const values = useValues(props.environmentId);
+  return <EnvironmentEditorForm key={values.data?.version ?? "empty"} {...props} />;
+}
+
+function EnvironmentEditorForm({
   environmentId,
   projectId,
   environmentName,
@@ -176,6 +185,7 @@ function EnvironmentEditor({
 
     try {
       await saveValues.mutateAsync({ values: payload });
+      setEdits({});
       toast.success("Values saved");
     } catch (err) {
       if (err instanceof ApiError && err.status === 422) {

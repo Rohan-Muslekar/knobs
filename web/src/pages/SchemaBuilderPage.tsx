@@ -8,8 +8,30 @@ import { useSchema, useUpdateSchema } from "@/hooks/useSchema";
 import type { SchemaField } from "@/hooks/useSchema";
 import { ApiError } from "@/lib/api";
 
-function emptyField(): SchemaField {
-  return { name: "", type: "string", required: false };
+// A field carries a client-only `_uid` so list rows can be keyed on stable
+// identity instead of array index — otherwise removing a row from the middle
+// of the list shifts every index below it and React remounts the wrong
+// inputs (losing focus, etc). `_uid` never leaves the browser; it's stripped
+// before the fields are sent to the server.
+type EditableField = SchemaField & { _uid: string };
+
+let uidCounter = 0;
+function nextUid(): string {
+  uidCounter += 1;
+  return `field-${uidCounter}`;
+}
+
+function withUid(field: SchemaField): EditableField {
+  return { ...field, _uid: nextUid() };
+}
+
+function emptyField(): EditableField {
+  return withUid({ name: "", type: "string", required: false });
+}
+
+function stripUid(field: EditableField): SchemaField {
+  const { _uid, ...rest } = field;
+  return rest;
 }
 
 function validateFields(fields: SchemaField[]): string | null {
@@ -19,6 +41,14 @@ function validateFields(fields: SchemaField[]): string | null {
   for (const field of fields) {
     if (field.type === "enum" && (!field.enumValues || field.enumValues.length === 0)) {
       return `Field "${field.name}" is an enum and needs at least one value.`;
+    }
+    if (field.type === "int" || field.type === "float") {
+      if (field.min !== undefined && Number.isNaN(field.min)) {
+        return `Field "${field.name}" has an invalid minimum.`;
+      }
+      if (field.max !== undefined && Number.isNaN(field.max)) {
+        return `Field "${field.name}" has an invalid maximum.`;
+      }
     }
   }
   return null;
@@ -54,11 +84,11 @@ function SchemaEditor({
   schemaVersion: number;
 }) {
   const updateSchema = useUpdateSchema(projectId);
-  const [fields, setFields] = useState<SchemaField[]>(initialFields);
+  const [fields, setFields] = useState<EditableField[]>(() => initialFields.map(withUid));
   const [formError, setFormError] = useState<string | null>(null);
 
   const updateField = (index: number, next: SchemaField) => {
-    setFields((prev) => prev.map((f, i) => (i === index ? next : f)));
+    setFields((prev) => prev.map((f, i) => (i === index ? { ...next, _uid: f._uid } : f)));
   };
 
   const removeField = (index: number) => {
@@ -77,7 +107,7 @@ function SchemaEditor({
       return;
     }
     try {
-      await updateSchema.mutateAsync({ fields });
+      await updateSchema.mutateAsync({ fields: fields.map(stripUid) });
       toast.success("Schema saved");
     } catch (err) {
       if (err instanceof ApiError) {
@@ -124,7 +154,7 @@ function SchemaEditor({
           </TableHeader>
           <TableBody>
             {fields.map((field, index) => (
-              <SchemaFieldRow key={index} field={field} index={index} onChange={updateField} onRemove={removeField} />
+              <SchemaFieldRow key={field._uid} field={field} index={index} onChange={updateField} onRemove={removeField} />
             ))}
           </TableBody>
         </Table>
