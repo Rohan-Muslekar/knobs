@@ -13,6 +13,7 @@ import (
 	"github.com/Rohan-Muslekar/knobs/internal/delivery"
 	"github.com/Rohan-Muslekar/knobs/internal/schema"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
+	"github.com/Rohan-Muslekar/knobs/internal/targeting"
 )
 
 func (d Deps) handleGetValues(w http.ResponseWriter, r *http.Request) {
@@ -42,7 +43,8 @@ func (d Deps) handleGetValues(w http.ResponseWriter, r *http.Request) {
 }
 
 type putValuesRequest struct {
-	Values map[string]any `json:"values"`
+	Values    map[string]any `json:"values"`
+	Targeting targeting.Map  `json:"targeting"`
 }
 
 func (d Deps) handlePutValues(w http.ResponseWriter, r *http.Request) {
@@ -96,12 +98,15 @@ func (d Deps) handlePutValues(w http.ResponseWriter, r *http.Request) {
 		if e := schema.ValidateValues(compiled, req.Values); e != nil {
 			return &validationFailure{err: e}
 		}
+		if e := targeting.Validate(currentSchema.Definition, req.Targeting); e != nil {
+			return &validationFailure{err: e}
+		}
 
 		n, e := d.Repo.NextVersionNumber(r.Context(), tx, env.ID)
 		if e != nil {
 			return e
 		}
-		newVersion, e = d.Repo.InsertVersion(r.Context(), tx, env.ID, n, currentSchema.SchemaVersion, req.Values, nil, uid)
+		newVersion, e = d.Repo.InsertVersion(r.Context(), tx, env.ID, n, currentSchema.SchemaVersion, req.Values, req.Targeting, uid)
 		if e != nil {
 			return e
 		}
@@ -166,5 +171,6 @@ func valuesView(cv store.ConfigVersion) map[string]any {
 		"version":       cv.Version,
 		"values":        values,
 		"schemaVersion": cv.SchemaVersion,
+		"targeting":     cv.Targeting,
 	}
 }

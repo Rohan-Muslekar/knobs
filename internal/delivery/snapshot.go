@@ -11,6 +11,7 @@ import (
 
 	"github.com/Rohan-Muslekar/knobs/internal/schema"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
+	"github.com/Rohan-Muslekar/knobs/internal/targeting"
 )
 
 // SchemaHash returns the sha256 hex digest of def's canonical JSON, so an SDK
@@ -53,6 +54,7 @@ type Snapshot struct {
 	Revision   int64          `json:"revision"`
 	SchemaHash string         `json:"schemaHash"`
 	Values     map[string]any `json:"values"`
+	Targeting  targeting.Map  `json:"targeting,omitempty"`
 }
 
 // BuildSnapshot assembles a Snapshot from an environment's current config
@@ -69,5 +71,6 @@ func BuildSnapshot(current store.ConfigVersion, def schema.Definition, revision 
 		Revision:   revision,
 		SchemaHash: SchemaHash(def),
 		Values:     values,
+		Targeting:  current.Targeting,
 	}
 }
