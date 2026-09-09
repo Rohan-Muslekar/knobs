@@ -1,0 +1,16 @@
+{
+  "name": "knobs-example-typescript",
+  "private": true,
+  "type": "module",
+  "description": "Reference: consuming @knobs/sdk from plain TypeScript",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@knobs/sdk": "file:../../sdk/typescript"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.3"
+  }
+}
