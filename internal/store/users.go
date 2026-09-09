@@ -38,6 +38,17 @@ func (r *Repo) UserByEmail(ctx context.Context, db DBTX, email string) (User, er
 	return u, err
 }
 
+func (r *Repo) UserByID(ctx context.Context, db DBTX, id uuid.UUID) (User, error) {
+	var u User
+	err := db.QueryRow(ctx,
+		`SELECT id, email, password_hash, created_at FROM app_user WHERE id = $1`, id,
+	).Scan(&u.ID, &u.Email, &u.PasswordHash, &u.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, ErrNotFound
+	}
+	return u, err
+}
+
 func (r *Repo) CountUsers(ctx context.Context, db DBTX) (int, error) {
 	var n int
 	err := db.QueryRow(ctx, `SELECT count(*) FROM app_user`).Scan(&n)

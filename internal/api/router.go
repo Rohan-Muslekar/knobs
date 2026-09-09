@@ -8,12 +8,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/Rohan-Muslekar/knobs/internal/auth"
+	"github.com/Rohan-Muslekar/knobs/internal/store"
 	"github.com/Rohan-Muslekar/knobs/web"
 )
 
 // Deps carries everything the HTTP layer needs. It grows as later phases add
-// a store, auth, and the SSE hub.
-type Deps struct{}
+// the SSE hub.
+type Deps struct {
+	Repo *store.Repo
+	Auth *auth.Authenticator
+}
 
 // NewRouter wires all routes and returns the root handler.
 func NewRouter(deps Deps) chi.Router {
@@ -29,6 +34,17 @@ func NewRouter(deps Deps) chi.Router {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
+		})
+
+		// Public auth routes.
+		r.Post("/auth/login", deps.handleLogin)
+		r.Post("/auth/logout", deps.handleLogout)
+
+		// Everything below requires a valid session.
+		r.Group(func(r chi.Router) {
+			r.Use(requireUser(deps))
+			r.Get("/auth/me", deps.handleMe)
+			// Later tasks add project/environment/schema/value/version/audit routes here.
 		})
 	})
 
