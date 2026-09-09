@@ -432,6 +432,99 @@ func TestStreamSurvivesShortWriteTimeout(t *testing.T) {
 	waitForVersion(t, frames, 10*time.Second, 2)
 }
 
+// TestStreamHeartbeat proves handleStream actually emits a `: heartbeat`
+// SSE comment while idle, using streamTestApp's injected 300ms
+// StreamHeartbeat so the test doesn't wait out the real 25s default.
+// It opens with since=<current version> so the immediate on-connect
+// snapshot is suppressed (see TestStreamFanOut's second connection for the
+// same suppression) — but that alone isn't enough to make the heartbeat
+// the very first thing off the wire: the Listener can still deliver a
+// stale-duplicate `data:` frame for a version <= since (the same benign
+// late-notification replay waitForVersion above tolerates, e.g. from the
+// seed write in seedStreamFixture being processed after this stream
+// subscribes). So this test discards any leading data frames at or below
+// since exactly like waitForVersion discards stale versions, and only
+// fails if a *newer* frame or a non-comment, non-data line shows up before
+// the heartbeat, or if no heartbeat arrives within the bounded timeout.
+func TestStreamHeartbeat(t *testing.T) {
+	router, cookie, _, _ := streamTestApp(t)
+	_, key := seedStreamFixture(t, router, cookie)
+
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	streamCtx, cancelStream := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelStream()
+	// seedStreamFixture leaves the environment at version 1; since=1 equals
+	// the current version, so no immediate snapshot is sent (per
+	// handleStream's `cv.Version > since` gate).
+	const since = 1
+	req, _ := http.NewRequestWithContext(streamCtx, http.MethodGet, ts.URL+"/v1/stream?since=1", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
+	}
+
+	type lineResult struct {
+		line string
+		err  error
+	}
+	lines := make(chan lineResult, 16)
+	go func() {
+		reader := bufio.NewReader(resp.Body)
+		for {
+			line, err := reader.ReadString('\n')
+			lines <- lineResult{line: strings.TrimRight(line, "\n"), err: err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case res := <-lines:
+			if res.err != nil {
+				t.Fatalf("read line: %v", res.err)
+			}
+			switch {
+			case res.line == "":
+				// Blank line separating SSE events; keep reading.
+				continue
+			case strings.HasPrefix(res.line, ":"):
+				// The heartbeat comment itself — this is what the test is
+				// actually proving. Any content after the leading ":" (the
+				// handler writes ": heartbeat") is accepted; the ":" is
+				// what makes it a comment per the SSE spec.
+				return
+			default:
+				payload, ok := strings.CutPrefix(res.line, "data: ")
+				if !ok {
+					t.Fatalf("unexpected line before heartbeat: %q", res.line)
+				}
+				var m map[string]any
+				if err := json.Unmarshal([]byte(payload), &m); err != nil {
+					t.Fatalf("unparseable data frame before heartbeat: %q: %v", res.line, err)
+				}
+				if v, _ := m["version"].(float64); int(v) > since {
+					t.Fatalf("data frame with version %v (> since %d) arrived before the heartbeat", m["version"], since)
+				}
+				// version <= since: a benign stale-duplicate replay, same
+				// as waitForVersion discards above. Keep reading for the
+				// heartbeat.
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for the heartbeat comment")
+		}
+	}
+}
+
 // TestStreamShutdownSignalDrainsConnection proves that closing Deps.Shutdown
 // (what app.Run does, ahead of calling srv.Shutdown, on SIGINT/SIGTERM)
 // makes an open handleStream connection return promptly on its own — the
