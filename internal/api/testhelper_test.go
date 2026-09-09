@@ -22,6 +22,15 @@ import (
 // because test helpers do not cross package boundaries.
 func migratedPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	pool, _ := migratedPoolAndURL(t)
+	return pool
+}
+
+// migratedPoolAndURL is migratedPool plus the raw connection string, needed
+// by callers that must open their own connection outside the pool — e.g. a
+// delivery.Listener, which LISTENs on a dedicated, non-pooled pgx.Conn.
+func migratedPoolAndURL(t *testing.T) (*pgxpool.Pool, string) {
+	t.Helper()
 	ctx := context.Background()
 	pg, err := tcpostgres.Run(ctx, "postgres:16-alpine",
 		tcpostgres.WithDatabase("knobs"),
@@ -53,5 +62,5 @@ func migratedPool(t *testing.T) *pgxpool.Pool {
 		t.Fatalf("pool: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	return pool
+	return pool, url
 }
