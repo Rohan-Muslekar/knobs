@@ -202,3 +202,78 @@ func TestSnapshotAPI(t *testing.T) {
 		t.Fatalf("snapshot for env with no values body = %v, want {error: no values set}", emptyBody)
 	}
 }
+
+// TestSnapshotTouchesLastUsedAt proves a delivery request through
+// apiKeyGuard updates the presented key's last_used_at, so operators can
+// tell a live key from a dead one. apiKeyGuard calls repo.TouchApiKey
+// inline, before next.ServeHTTP, so the update is already committed by the
+// time this GET returns — no polling or retry needed for a deterministic
+// assertion.
+func TestSnapshotTouchesLastUsedAt(t *testing.T) {
+	router, cookie, repo := seededRouter(t)
+
+	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	if projRec.Code != http.StatusCreated {
+		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
+	}
+	var proj map[string]any
+	_ = json.NewDecoder(projRec.Body).Decode(&proj)
+	projectID, _ := proj["id"].(string)
+
+	schemaBody := `{"fields":[{"name":"maxRetries","type":"int","required":true,"max":5}]}`
+	if rec := put(router, "/v1/projects/"+projectID+"/schema", schemaBody, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put schema = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	envRec := post(router, "/v1/projects/"+projectID+"/environments", `{"name":"staging"}`, cookie)
+	if envRec.Code != http.StatusCreated {
+		t.Fatalf("create env = %d, want 201, body=%s", envRec.Code, envRec.Body.String())
+	}
+	var env map[string]any
+	_ = json.NewDecoder(envRec.Body).Decode(&env)
+	envID, _ := env["id"].(string)
+
+	if rec := put(router, "/v1/environments/"+envID+"/values", `{"values":{"maxRetries":3}}`, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put values = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	keyRec := post(router, "/v1/environments/"+envID+"/api-keys", `{"name":"sdk"}`, cookie)
+	if keyRec.Code != http.StatusCreated {
+		t.Fatalf("create key = %d, want 201, body=%s", keyRec.Code, keyRec.Body.String())
+	}
+	var keyBody map[string]any
+	_ = json.NewDecoder(keyRec.Body).Decode(&keyBody)
+	keyID, _ := keyBody["id"].(string)
+	plaintext, _ := keyBody["key"].(string)
+
+	// Before any delivery request, a freshly created key has never been
+	// used.
+	before, err := repo.ListApiKeys(t.Context(), repo.Pool(), uuid.MustParse(envID))
+	if err != nil {
+		t.Fatalf("ListApiKeys before: %v", err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("keys before = %d, want 1", len(before))
+	}
+	if before[0].LastUsedAt != nil {
+		t.Fatalf("LastUsedAt before any use = %v, want nil", before[0].LastUsedAt)
+	}
+
+	if rec := bearer(router, "/v1/snapshot", plaintext); rec.Code != http.StatusOK {
+		t.Fatalf("snapshot = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	after, err := repo.ListApiKeys(t.Context(), repo.Pool(), uuid.MustParse(envID))
+	if err != nil {
+		t.Fatalf("ListApiKeys after: %v", err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("keys after = %d, want 1", len(after))
+	}
+	if after[0].ID.String() != keyID {
+		t.Fatalf("after[0].ID = %s, want %s", after[0].ID, keyID)
+	}
+	if after[0].LastUsedAt == nil {
+		t.Fatal("LastUsedAt after a snapshot fetch = nil, want non-nil")
+	}
+}
