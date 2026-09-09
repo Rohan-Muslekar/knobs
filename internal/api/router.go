@@ -48,7 +48,10 @@ func NewRouter(deps Deps) chi.Router {
 			r.Get("/projects", deps.handleListProjects)
 			r.Get("/projects/{projectID}", deps.handleGetProject)
 			r.Patch("/projects/{projectID}", deps.handlePatchProject)
-			// Later tasks add environment/schema/value/version/audit routes here.
+			r.Post("/projects/{projectID}/environments", deps.handleCreateEnvironment)
+			r.Get("/projects/{projectID}/environments", deps.handleListEnvironments)
+			r.Get("/environments/{envID}", deps.handleGetEnvironment)
+			// Later tasks add schema/value/version/audit routes here.
 		})
 	})
 
