@@ -42,10 +42,37 @@ type Deps struct {
 	// fires — handleStream's select treats that case like any other never-
 	// ready channel.
 	Shutdown <-chan struct{}
+
+	// LoginLimiter throttles POST /v1/auth/login per client IP. Nil here
+	// (the zero value — every Deps literal outside this package, since the
+	// type is unexported) is filled in by NewRouter with the production
+	// default (loginMaxAttempts per loginWindow). A test within package
+	// api can still construct its own via newLoginLimiter to exercise a
+	// tighter budget or an injected clock.
+	LoginLimiter *loginLimiter
+
+	// TrustProxy tells clientIP whether to honor X-Forwarded-For (set from
+	// config.Config.TrustProxy by app.Run). Defaults to false — the zero
+	// value — in every test and any Deps literal that doesn't set it, so
+	// XFF is ignored unless the operator has explicitly opted in. See
+	// clientIP's doc comment in ratelimit.go for why that default matters.
+	TrustProxy bool
 }
+
+// Production defaults for the login rate limiter. This is a per-instance,
+// in-memory budget — fine for a single Knobs instance, but a multi-instance
+// deployment would need a shared store (see loginLimiter's doc comment).
+const (
+	loginMaxAttempts = 10
+	loginWindow      = 15 * time.Minute
+)
 
 // NewRouter wires all routes and returns the root handler.
 func NewRouter(deps Deps) chi.Router {
+	if deps.LoginLimiter == nil {
+		deps.LoginLimiter = newLoginLimiter(loginMaxAttempts, loginWindow)
+	}
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.Recoverer)

@@ -67,54 +67,87 @@ func (d Deps) handlePutSchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Change-safety: every environment's currently-live values must still
-	// validate against the new schema. Nothing is persisted until every
-	// environment clears this check.
-	envs, err := d.Repo.ListEnvironments(r.Context(), d.Repo.Pool(), projectID)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not list environments")
-		return
-	}
-	for _, env := range envs {
-		if env.CurrentVersionID == nil {
-			continue
-		}
-		cv, err := d.Repo.CurrentVersion(r.Context(), d.Repo.Pool(), env.ID)
-		if errors.Is(err, store.ErrNotFound) {
-			continue
-		}
-		if err != nil {
-			writeErr(w, http.StatusInternalServerError, "could not load current values")
-			return
-		}
-		if err := schema.ValidateValues(compiled, cv.Values); err != nil {
-			writeJSON(w, http.StatusConflict, map[string]string{
-				"error":       "new schema is incompatible with existing values: " + err.Error(),
-				"environment": env.Name,
-			})
-			return
-		}
-	}
-
 	// requireUser has already run on this route, so the id is always present;
 	// the ok is discarded rather than checked again.
 	uid, _ := currentUserID(r.Context())
 	var cs store.ConfigSchema
 	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
-		var e error
-		cs, e = d.Repo.UpdateSchema(r.Context(), tx, projectID, def, uid)
+		// GetOrInitSchema then LockProjectSchema, in that order, in this same
+		// tx: the row must exist before it can be locked. Holding the lock
+		// for the rest of this closure serializes against a concurrent
+		// handlePutValues on this project, so the change-safety read below
+		// sees committed values and can't be raced by a value write that
+		// commits in between the read and UpdateSchema.
+		if _, e := d.Repo.GetOrInitSchema(r.Context(), tx, projectID); e != nil {
+			return e
+		}
+		if _, e := d.Repo.LockProjectSchema(r.Context(), tx, projectID); e != nil {
+			return e
+		}
+
+		// Change-safety: every environment's currently-live values must
+		// still validate against the new schema. Nothing is persisted until
+		// every environment clears this check.
+		envs, e := d.Repo.ListEnvironments(r.Context(), tx, projectID)
 		if e != nil {
 			return e
+		}
+		for _, env := range envs {
+			if env.CurrentVersionID == nil {
+				continue
+			}
+			cv, e := d.Repo.CurrentVersion(r.Context(), tx, env.ID)
+			if errors.Is(e, store.ErrNotFound) {
+				continue
+			}
+			if e != nil {
+				return e
+			}
+			if e := schema.ValidateValues(compiled, cv.Values); e != nil {
+				return &changeSafetyConflict{
+					message:     "new schema is incompatible with existing values: " + e.Error(),
+					environment: env.Name,
+				}
+			}
+		}
+
+		var e2 error
+		cs, e2 = d.Repo.UpdateSchema(r.Context(), tx, projectID, def, uid)
+		if e2 != nil {
+			return e2
 		}
 		return d.Repo.RecordAudit(r.Context(), tx, projectID, uid, "schema.update", projectID.String(),
 			map[string]any{"schemaVersion": cs.SchemaVersion})
 	})
 	if err != nil {
+		// changeSafetyConflict means the tx rolled back because the new
+		// schema is incompatible with some environment's live values — a
+		// client error (409), not a server fault.
+		var conflict *changeSafetyConflict
+		if errors.As(err, &conflict) {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error":       conflict.message,
+				"environment": conflict.environment,
+			})
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "could not update schema")
 		return
 	}
 	writeJSON(w, http.StatusOK, schemaView(cs))
 }
+
+// changeSafetyConflict wraps a change-safety failure surfaced from inside a
+// WithTx closure, so the handler can tell "the tx rolled back because the
+// new schema breaks an environment's live values" (409, a client error)
+// apart from any other tx failure (500, a server error) once WithTx has
+// returned.
+type changeSafetyConflict struct {
+	message     string
+	environment string
+}
+
+func (c *changeSafetyConflict) Error() string { return c.message }
 
 func schemaView(cs store.ConfigSchema) map[string]any {
 	fields := cs.Definition.Fields
