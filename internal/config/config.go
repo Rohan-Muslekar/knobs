@@ -6,6 +6,10 @@ import (
 	"os"
 )
 
+// minJWTSecretLen is the floor for JWT_SECRET: short secrets are brute-
+// forceable and undermine the whole point of signing sessions.
+const minJWTSecretLen = 32
+
 // Config holds server runtime settings. Knobs never bootstraps its own config
 // from itself; these come from the process environment.
 type Config struct {
@@ -15,6 +19,13 @@ type Config struct {
 	AdminEmail    string
 	AdminPassword string
 	CookieSecure  bool
+
+	// TrustProxy tells the HTTP layer whether to honor X-Forwarded-For for
+	// client-IP-keyed logic (e.g. the login rate limiter). Defaults to
+	// false: that header is client-settable, so trusting it without a
+	// known, correctly-configured reverse proxy in front of Knobs would let
+	// an attacker forge a fresh IP per request and bypass any such limit.
+	TrustProxy bool
 }
 
 // Load reads settings from environment variables and applies defaults.
@@ -26,12 +37,16 @@ func Load() (Config, error) {
 		AdminEmail:    os.Getenv("ADMIN_EMAIL"),
 		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
 		CookieSecure:  os.Getenv("COOKIE_SECURE") != "false",
+		TrustProxy:    os.Getenv("TRUST_PROXY") == "true",
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, errors.New("DATABASE_URL is required")
 	}
 	if cfg.JWTSecret == "" {
 		return Config{}, errors.New("JWT_SECRET is required")
+	}
+	if len(cfg.JWTSecret) < minJWTSecretLen {
+		return Config{}, errors.New("JWT_SECRET must be at least 32 characters")
 	}
 	if cfg.ListenAddr == "" {
 		cfg.ListenAddr = ":8080"

@@ -13,6 +13,12 @@ type loginRequest struct {
 }
 
 func (d Deps) handleLogin(w http.ResponseWriter, r *http.Request) {
+	key := clientIP(r, d.TrustProxy)
+	if d.LoginLimiter != nil && !d.LoginLimiter.underLimit(key) {
+		writeErr(w, http.StatusTooManyRequests, "too many login attempts, try again later")
+		return
+	}
+
 	var req loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid body")
@@ -28,6 +34,11 @@ func (d Deps) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ok := d.Auth.Check(hash, req.Password)
 	if err != nil || !ok {
 		// Same response whether the user is missing or the password is wrong.
+		// Count it against the limiter — a successful login doesn't consume
+		// this client's budget.
+		if d.LoginLimiter != nil {
+			d.LoginLimiter.allow(key)
+		}
 		writeErr(w, http.StatusUnauthorized, "invalid credentials")
 		return
 	}
