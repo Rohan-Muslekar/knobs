@@ -66,6 +66,17 @@ func NewRouter(deps Deps) chi.Router {
 			r.Post("/environments/{envID}/rollback", deps.handleRollback)
 			r.Get("/projects/{projectID}/audit", deps.handleListAudit)
 		})
+
+		// Delivery routes: machine consumers (SDKs) authenticate with a
+		// Bearer API key, never a session cookie. This is a separate
+		// r.Group from the requireUser one above, each with its own
+		// middleware stack, so neither credential can satisfy the other's
+		// guard — a session cookie can't reach /v1/snapshot, and an API key
+		// can't reach the management routes.
+		r.Group(func(r chi.Router) {
+			r.Use(apiKeyGuard(deps))
+			r.Get("/snapshot", deps.handleSnapshot)
+		})
 	})
 
 	// SPA catch-all mounted last; explicit API routes above take precedence.
