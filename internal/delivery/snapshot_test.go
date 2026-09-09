@@ -1,6 +1,8 @@
 package delivery
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -8,6 +10,7 @@ import (
 
 	"github.com/Rohan-Muslekar/knobs/internal/schema"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
+	"github.com/Rohan-Muslekar/knobs/internal/targeting"
 )
 
 func TestSchemaHash_StableForSameInput(t *testing.T) {
@@ -99,5 +102,61 @@ func TestBuildSnapshot_NilValuesBecomeEmptyMap(t *testing.T) {
 	}
 	if len(snap.Values) != 0 {
 		t.Fatalf("Values = %v, want empty", snap.Values)
+	}
+}
+
+func TestBuildSnapshot_CopiesTargeting(t *testing.T) {
+	def := schema.Definition{Fields: []schema.Field{
+		{Name: "maxRetries", Type: "int"},
+	}}
+	tgt := targeting.Map{
+		"maxRetries": []targeting.Rule{
+			{Value: float64(7)},
+		},
+	}
+	cv := store.ConfigVersion{Version: 1, Targeting: tgt}
+
+	snap := BuildSnapshot(cv, def, 0)
+
+	if len(snap.Targeting) != 1 || len(snap.Targeting["maxRetries"]) != 1 {
+		t.Fatalf("Targeting = %v, want %v", snap.Targeting, tgt)
+	}
+
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"targeting"`) {
+		t.Fatalf("marshaled snapshot missing targeting field: %s", raw)
+	}
+
+	var round Snapshot
+	if err := json.Unmarshal(raw, &round); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if len(round.Targeting) != 1 || len(round.Targeting["maxRetries"]) != 1 {
+		t.Fatalf("round-tripped Targeting = %v, want %v", round.Targeting, tgt)
+	}
+	if round.Targeting["maxRetries"][0].Value != float64(7) {
+		t.Fatalf("round-tripped rule value = %v, want 7", round.Targeting["maxRetries"][0].Value)
+	}
+}
+
+func TestBuildSnapshot_NilTargetingOmittedFromJSON(t *testing.T) {
+	def := schema.Definition{}
+	cv := store.ConfigVersion{Version: 1, Targeting: nil}
+
+	snap := BuildSnapshot(cv, def, 0)
+
+	if snap.Targeting != nil {
+		t.Fatalf("Targeting = %v, want nil", snap.Targeting)
+	}
+
+	raw, err := json.Marshal(snap)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "targeting") {
+		t.Fatalf("marshaled snapshot with nil Targeting should omit the field entirely: %s", raw)
 	}
 }
