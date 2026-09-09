@@ -101,7 +101,7 @@ func (d Deps) handlePutValues(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return e
 		}
-		newVersion, e = d.Repo.InsertVersion(r.Context(), tx, env.ID, n, currentSchema.SchemaVersion, req.Values, uid)
+		newVersion, e = d.Repo.InsertVersion(r.Context(), tx, env.ID, n, currentSchema.SchemaVersion, req.Values, nil, uid)
 		if e != nil {
 			return e
 		}
