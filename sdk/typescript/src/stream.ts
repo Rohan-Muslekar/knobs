@@ -1,31 +1,38 @@
-import type { KnobsOptions, Snapshot } from "./types.js";
+import type { Delta, KnobsOptions, Snapshot } from "./types.js";
 
 /**
- * Opens the SSE live-update stream at `GET {endpoint}/v1/stream?since={since}`.
+ * Opens the SSE live-update stream at `GET {endpoint}/v1/stream?since={since}` (plus
+ * `&deltas=1` when `opts.useDeltas` isn't explicitly false — see below).
  *
  * Reads `res.body` as a byte stream, buffers it, and splits on the SSE frame delimiter
  * (`\n\n`) — a frame may arrive split across multiple chunk boundaries, so bytes are
  * accumulated across `reader.read()` calls rather than parsed chunk-by-chunk. Within a
  * frame, `:`-prefixed lines are comments (the server's periodic `: heartbeat` keepalive)
- * and are ignored; `data:`-prefixed lines are joined and parsed as JSON into a `Snapshot`,
- * then handed to `onSnapshot`. Any fetch failure, non-2xx response, malformed payload, or
- * the server ending the connection (stream closes without being cancelled) is reported via
+ * and are ignored; `data:`-prefixed lines are joined and parsed as JSON. A frame whose
+ * `type` is `"delta"` is handed to `onDelta`; a frame whose `type` is `"snapshot"` — or has
+ * no `type` at all, for backward compat with a server that only ever sends bare snapshots —
+ * is handed to `onSnapshot`. Any fetch failure, non-2xx response, malformed payload, or the
+ * server ending the connection (stream closes without being cancelled) is reported via
  * `onError` — the caller (client.ts) is responsible for reconnecting.
  *
  * Returns a cancel function that aborts the underlying fetch/stream. After cancel, no
- * further `onSnapshot`/`onError` calls are made — this keeps `close()` leak-free and keeps
- * tests deterministic (a cancelled stream simply stops, it doesn't surface a spurious error).
+ * further `onSnapshot`/`onDelta`/`onError` calls are made — this keeps `close()` leak-free
+ * and keeps tests deterministic (a cancelled stream simply stops, it doesn't surface a
+ * spurious error).
  */
 export function openStream(
   opts: KnobsOptions,
   since: number,
   onSnapshot: (snapshot: Snapshot) => void,
+  onDelta: (delta: Delta) => void,
   onError: (err: unknown) => void,
 ): () => void {
   // Same trim-and-concat pattern as http.ts: appending to the endpoint rather than
   // `new URL(path, base)`, which would reset the path and drop a reverse-proxy prefix.
   const base = opts.endpoint.replace(/\/+$/, "");
-  const url = `${base}/v1/stream?since=${encodeURIComponent(String(since))}`;
+  const useDeltas = opts.useDeltas ?? true;
+  const url =
+    `${base}/v1/stream?since=${encodeURIComponent(String(since))}` + (useDeltas ? "&deltas=1" : "");
 
   const controller = new AbortController();
   let cancelled = false;
@@ -106,8 +113,12 @@ export function openStream(
     }
     if (dataLines.length === 0) return;
 
-    const snapshot = JSON.parse(dataLines.join("\n")) as Snapshot;
-    onSnapshot(snapshot);
+    const parsed = JSON.parse(dataLines.join("\n")) as { type?: string };
+    if (parsed.type === "delta") {
+      onDelta(parsed as Delta);
+    } else {
+      onSnapshot(parsed as Snapshot);
+    }
   }
 
   return function cancel(): void {

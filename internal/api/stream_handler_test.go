@@ -596,3 +596,207 @@ func TestStreamShutdownSignalDrainsConnection(t *testing.T) {
 		}
 	}
 }
+
+// TestStreamDefaultHasNoTypeField is the backward-compat guarantee for
+// deltas being opt-in: a stream opened without deltas=1 must keep emitting
+// exactly the wire format it did before deltas existed anywhere in the
+// codebase — a bare Snapshot, with no "type" discriminator — for both the
+// initial on-connect snapshot and every later fan-out frame. Any handler
+// change that starts tagging default frames with "type" (even
+// "type":"snapshot") would silently change the wire format for every
+// existing consumer that doesn't know about deltas, which is exactly what
+// this test exists to catch.
+func TestStreamDefaultHasNoTypeField(t *testing.T) {
+	router, cookie, _, _ := streamTestApp(t)
+	envID, key := seedStreamFixture(t, router, cookie)
+
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	streamCtx, cancelStream := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelStream()
+	req, _ := http.NewRequestWithContext(streamCtx, http.MethodGet, ts.URL+"/v1/stream?since=0", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
+	}
+	frames := sseFrames(resp)
+
+	initial := waitFrame(t, frames, 5*time.Second)
+	if _, ok := initial["type"]; ok {
+		t.Fatalf("initial frame has a %q field = %v, want none (default stream must stay a bare Snapshot)", "type", initial["type"])
+	}
+
+	if rec := put(router, "/v1/environments/"+envID+"/values", `{"values":{"maxRetries":7}}`, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put values v2 = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	updated := waitForVersion(t, frames, 10*time.Second, 2)
+	if _, ok := updated["type"]; ok {
+		t.Fatalf("fan-out frame has a %q field = %v, want none (default stream must stay a bare Snapshot)", "type", updated["type"])
+	}
+}
+
+// TestStreamDeltaOptIn proves the deltas=1 opt-in path: the initial
+// on-connect snapshot goes out as a full "type":"snapshot" frame (setting
+// the connection's baseline), and a later fan-out write that only changes
+// one value key goes out as a "type":"delta" frame whose from/revision
+// track the baseline and the new revision, and whose values.set carries
+// exactly the key that changed — not the one that didn't. The fixture uses
+// a two-field schema (rather than seedStreamFixture's single field)
+// specifically so "exactly the changed key" is a real assertion and not
+// vacuously true.
+func TestStreamDeltaOptIn(t *testing.T) {
+	router, cookie, _, _ := streamTestApp(t)
+
+	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	if projRec.Code != http.StatusCreated {
+		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
+	}
+	var proj map[string]any
+	_ = json.NewDecoder(projRec.Body).Decode(&proj)
+	projectID, _ := proj["id"].(string)
+
+	schemaBody := `{"fields":[{"name":"maxRetries","type":"int","required":true,"max":10},{"name":"timeoutMs","type":"int","required":true,"max":100000}]}`
+	if rec := put(router, "/v1/projects/"+projectID+"/schema", schemaBody, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put schema = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	envRec := post(router, "/v1/projects/"+projectID+"/environments", `{"name":"staging"}`, cookie)
+	if envRec.Code != http.StatusCreated {
+		t.Fatalf("create env = %d, want 201, body=%s", envRec.Code, envRec.Body.String())
+	}
+	var env map[string]any
+	_ = json.NewDecoder(envRec.Body).Decode(&env)
+	envID, _ := env["id"].(string)
+
+	if rec := put(router, "/v1/environments/"+envID+"/values", `{"values":{"maxRetries":3,"timeoutMs":1000}}`, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put values v1 = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	keyRec := post(router, "/v1/environments/"+envID+"/api-keys", `{"name":"sdk"}`, cookie)
+	if keyRec.Code != http.StatusCreated {
+		t.Fatalf("create key = %d, want 201, body=%s", keyRec.Code, keyRec.Body.String())
+	}
+	var keyBody map[string]any
+	_ = json.NewDecoder(keyRec.Body).Decode(&keyBody)
+	key, _ := keyBody["key"].(string)
+	if key == "" {
+		t.Fatal("no plaintext key returned")
+	}
+
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	streamCtx, cancelStream := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelStream()
+	req, _ := http.NewRequestWithContext(streamCtx, http.MethodGet, ts.URL+"/v1/stream?since=0&deltas=1", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
+	}
+	frames := sseFrames(resp)
+
+	initial := waitFrame(t, frames, 5*time.Second)
+	if got := initial["type"]; got != "snapshot" {
+		t.Fatalf("initial frame type = %v, want %q", got, "snapshot")
+	}
+	initialRevision, _ := initial["revision"].(float64)
+	if initialRevision != 1 {
+		t.Fatalf("initial frame revision = %v, want 1", initial["revision"])
+	}
+
+	// Change only maxRetries; timeoutMs is re-sent with the same value it
+	// already had, so it must NOT show up in the delta's values.set.
+	if rec := put(router, "/v1/environments/"+envID+"/values", `{"values":{"maxRetries":7,"timeoutMs":1000}}`, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put values v2 = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	delta := waitForVersion(t, frames, 10*time.Second, 2)
+	if got := delta["type"]; got != "delta" {
+		t.Fatalf("second frame type = %v, want %q (full frame %+v)", got, "delta", delta)
+	}
+	if from, _ := delta["from"].(float64); from != initialRevision {
+		t.Fatalf("delta from = %v, want %v (the initial baseline revision)", delta["from"], initialRevision)
+	}
+	if rev, _ := delta["revision"].(float64); rev != 2 {
+		t.Fatalf("delta revision = %v, want 2", delta["revision"])
+	}
+	values, _ := delta["values"].(map[string]any)
+	set, _ := values["set"].(map[string]any)
+	if len(set) != 1 {
+		t.Fatalf("delta values.set = %+v, want exactly one key", set)
+	}
+	if mr, _ := set["maxRetries"].(float64); mr != 7 {
+		t.Fatalf("delta values.set[\"maxRetries\"] = %v, want 7", set["maxRetries"])
+	}
+	if _, ok := set["timeoutMs"]; ok {
+		t.Fatalf("delta values.set unexpectedly contains \"timeoutMs\" (unchanged key): %+v", set)
+	}
+}
+
+// TestStreamDeltaNoBaselineSendsFullFrame proves that when deltas=1 but no
+// initial snapshot goes out — since is at or past the environment's
+// current revision, same gating TestStreamFanOut's second connection
+// exercises for the non-delta path — the connection still has no baseline
+// to diff against, so the very first frame delivered off the Hub must be a
+// full "type":"snapshot" frame, not a delta.
+//
+// It does NOT assert that this first frame is quiet-then-the-v2-write, and
+// it does NOT wait on a specific revision. That coupling used to make the
+// test order-dependent: seedStreamFixture's own write (revision 1) fires a
+// pg_notify that can be delivered late — after this stream has already
+// subscribed — the same benign replay TestStreamHeartbeat documents and
+// tolerates. If that happens here, the late rev-1 snapshot is what actually
+// arrives first, and it lands as a full frame precisely because haveBaseline
+// is still false at that point — the property under test holds regardless
+// of which write produced the first frame. Asserting "no frame yet" (as this
+// test used to) or "the first frame is revision 2" both broke on that
+// replay; asserting only on the first frame's type does not. The v2 write
+// below just guarantees some frame arrives even when the seed's notify has
+// already been fully drained before this stream subscribed.
+func TestStreamDeltaNoBaselineSendsFullFrame(t *testing.T) {
+	router, cookie, _, _ := streamTestApp(t)
+	envID, key := seedStreamFixture(t, router, cookie)
+
+	ts := httptest.NewServer(router)
+	defer ts.Close()
+
+	streamCtx, cancelStream := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelStream()
+	// seedStreamFixture leaves the environment at revision 1; since=1 equals
+	// the current revision, so no immediate snapshot is sent — mirrors the
+	// since gating TestStreamFanOut's second connection relies on.
+	req, _ := http.NewRequestWithContext(streamCtx, http.MethodGet, ts.URL+"/v1/stream?since=1&deltas=1", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d, want 200", resp.StatusCode)
+	}
+	frames := sseFrames(resp)
+
+	if rec := put(router, "/v1/environments/"+envID+"/values", `{"values":{"maxRetries":7}}`, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("put values v2 = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Whatever arrives first — a late replay of the seed's revision-1
+	// notify, or the fan-out from the v2 write above — there's no baseline
+	// yet, so it must go out as a full snapshot frame, never a delta.
+	first := waitFrame(t, frames, 10*time.Second)
+	if got := first["type"]; got != "snapshot" {
+		t.Fatalf("first frame (no baseline yet) type = %v, want %q, not a delta (frame=%+v)", got, "snapshot", first)
+	}
+}

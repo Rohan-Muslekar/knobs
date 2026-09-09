@@ -1,0 +1,86 @@
+{
+  "_comment": "Golden apply-parity vectors for internal/delivery.ApplyDelta. Shape: {base: Snapshot, steps: [{delta: Delta, expected: Snapshot}, ...]}. Each step's delta is applied to the RESULT of the previous step (base for step 0), and the result must equal that step's expected. SDKs implementing ApplyDelta should copy this file byte-identical and replay it the same way: fold `steps[i].delta` onto the running snapshot (starting from `base`) and compare against `steps[i].expected` at each step.",
+  "base": {
+    "version": 1,
+    "revision": 1,
+    "schemaHash": "h1",
+    "values": {
+      "retries": 3,
+      "timeout": 30
+    },
+    "targeting": {
+      "beta": [
+        { "value": false }
+      ]
+    }
+  },
+  "steps": [
+    {
+      "delta": {
+        "type": "delta",
+        "version": 1,
+        "revision": 2,
+        "from": 1,
+        "schemaHash": "h1",
+        "values": {
+          "set": { "retries": 5 },
+          "remove": ["timeout"]
+        },
+        "targeting": {
+          "set": {
+            "beta": [
+              { "value": true }
+            ]
+          }
+        }
+      },
+      "expected": {
+        "version": 1,
+        "revision": 2,
+        "schemaHash": "h1",
+        "values": {
+          "retries": 5
+        },
+        "targeting": {
+          "beta": [
+            { "value": true }
+          ]
+        }
+      }
+    },
+    {
+      "delta": {
+        "type": "delta",
+        "version": 2,
+        "revision": 3,
+        "from": 2,
+        "schemaHash": "h2",
+        "values": {
+          "set": { "maxConns": 10 }
+        },
+        "targeting": {
+          "set": {
+            "gamma": [
+              { "value": true }
+            ]
+          },
+          "remove": ["beta"]
+        }
+      },
+      "expected": {
+        "version": 2,
+        "revision": 3,
+        "schemaHash": "h2",
+        "values": {
+          "retries": 5,
+          "maxConns": 10
+        },
+        "targeting": {
+          "gamma": [
+            { "value": true }
+          ]
+        }
+      }
+    }
+  ]
+}

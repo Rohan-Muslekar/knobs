@@ -44,6 +44,13 @@ func (d Deps) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// deltas is opt-in: a client must ask for delta frames explicitly by
+	// passing deltas=1 (or =true). Leaving it off keeps the wire format
+	// byte-for-byte identical to before deltas existed — every frame a
+	// bare Snapshot, no "type" field — so existing SDKs and consumers that
+	// don't know about deltas keep working unchanged.
+	deltasEnabled := r.URL.Query().Get("deltas") == "1" || r.URL.Query().Get("deltas") == "true"
+
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeErr(w, http.StatusInternalServerError, "streaming unsupported")
@@ -105,6 +112,51 @@ func (d Deps) handleStream(w http.ResponseWriter, r *http.Request) {
 		return true
 	}
 
+	// lastSent/haveBaseline track, for the deltas-enabled path only, the
+	// most recent Snapshot this connection has actually put on the wire —
+	// the baseline ComputeDelta diffs the next one against. haveBaseline
+	// starts false, which is exactly what makes the very first frame sent
+	// (the initial since-gated snapshot, or — if that's skipped — the
+	// first frame off ch) fall through writeFrame's "no baseline yet"
+	// branch and go out as a full "snapshot" frame rather than a delta.
+	var lastSent delivery.Snapshot
+	var haveBaseline bool
+
+	// writeFrame is what both the initial snapshot and every subsequent
+	// ch delivery call to put a frame on the wire. With deltas off it's
+	// just writeSnapshot, unchanged. With deltas on: a delta frame goes
+	// out only once there's a baseline to diff against *and* snap is
+	// actually newer than it (guards against a stale/duplicate replay off
+	// ch regressing or repeating a frame already sent); otherwise — first
+	// frame, or a same-or-older repeat — a full "snapshot" frame goes out
+	// instead. Either way, on a successful write lastSent/haveBaseline
+	// advance to snap, so the next frame diffs against what this
+	// connection actually sent, not what merely arrived.
+	writeFrame := func(snap delivery.Snapshot) bool {
+		if !deltasEnabled {
+			return writeSnapshot(snap)
+		}
+
+		var data []byte
+		var err error
+		if haveBaseline && snap.Revision > lastSent.Revision {
+			data, err = json.Marshal(delivery.ComputeDelta(lastSent, snap))
+		} else {
+			data, err = delivery.FullFrameJSON(snap)
+		}
+		if err != nil {
+			return false
+		}
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+			return false
+		}
+		flusher.Flush()
+
+		lastSent = snap
+		haveBaseline = true
+		return true
+	}
+
 	// Re-read the environment now, after subscribing, rather than reusing
 	// the one loaded above (before subscribing): delivery_revision must
 	// come from the same moment-or-later as cv below, for the same reason
@@ -133,7 +185,7 @@ func (d Deps) handleStream(w http.ResponseWriter, r *http.Request) {
 			// a persistently broken schema load is at least visible in
 			// server logs, even though no individual caller sees it.
 			log.Printf("delivery: stream %s: could not load schema for initial snapshot: %v", envID, err)
-		} else if !writeSnapshot(delivery.BuildSnapshot(cv, cs.Definition, envNow.DeliveryRevision)) {
+		} else if !writeFrame(delivery.BuildSnapshot(cv, cs.Definition, envNow.DeliveryRevision)) {
 			return
 		}
 	case err != nil && !errors.Is(err, store.ErrNotFound):
@@ -164,7 +216,7 @@ func (d Deps) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			if !writeSnapshot(snap) {
+			if !writeFrame(snap) {
 				return
 			}
 		case <-ticker.C:
