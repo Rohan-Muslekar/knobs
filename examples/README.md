@@ -6,7 +6,7 @@ Short, copy-pasteable examples of consuming a Knobs config server from an app.
 |---|---|
 | [`typescript/`](./typescript) | Plain TS: `createClient` → in-memory typed reads + live `onChange`. Untyped and codegen-typed variants. |
 | [`nestjs/`](./nestjs) | A `KnobsModule` wiring the client as a DI provider with `onModuleInit`/`onModuleDestroy` lifecycle, plus optional OpenFeature. |
-| [`golang/`](./golang) | Go has **no v1 SDK** (v1 is TS/JS-only). A minimal stdlib client hitting the delivery API directly: `GET /v1/snapshot` + SSE `GET /v1/stream`, both Bearer-authed. |
+| [`golang/`](./golang) | A minimal stdlib client hitting the delivery API directly (`GET /v1/snapshot` + SSE `GET /v1/stream`, Bearer) — kept as a "how it works under the hood" illustration. For production Go, use the real [`sdk/go`](../sdk/go) module instead. |
 
 ## The model in one paragraph
 
