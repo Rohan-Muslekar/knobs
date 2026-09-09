@@ -1,6 +1,7 @@
+import { resolve, resolveAll } from "./eval.js";
 import { fetchSnapshot } from "./http.js";
 import { openStream } from "./stream.js";
-import type { KnobsClient, KnobsOptions, Snapshot } from "./types.js";
+import type { EvalContext, KnobsClient, KnobsOptions, Snapshot } from "./types.js";
 
 const EMPTY_SNAPSHOT: Snapshot = { version: 0, revision: 0, schemaHash: "", values: {} };
 
@@ -132,14 +133,19 @@ export function createClient(opts: KnobsOptions): KnobsClient {
       return readyPromise;
     },
 
-    get<T = unknown>(key: string): T | undefined {
-      return current.values[key] as T | undefined;
+    get<T = unknown>(key: string, ctx?: EvalContext): T | undefined {
+      if (ctx === undefined) return current.values[key] as T | undefined;
+      return resolve(key, current.values[key], current.targeting?.[key], ctx) as T | undefined;
     },
 
     getAll(): Record<string, unknown> {
       // Shallow copy: `current.values` is the SDK's live in-memory snapshot, so handing it
       // out by reference would let a consumer's mutation corrupt it. See onChange below.
       return { ...current.values };
+    },
+
+    evaluate(ctx: EvalContext): Record<string, unknown> {
+      return resolveAll(current.values, current.targeting, ctx);
     },
 
     onChange(cb: (values: Record<string, unknown>) => void): () => void {
