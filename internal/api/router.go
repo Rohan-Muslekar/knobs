@@ -8,12 +8,17 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/Rohan-Muslekar/knobs/internal/auth"
+	"github.com/Rohan-Muslekar/knobs/internal/store"
 	"github.com/Rohan-Muslekar/knobs/web"
 )
 
 // Deps carries everything the HTTP layer needs. It grows as later phases add
-// a store, auth, and the SSE hub.
-type Deps struct{}
+// the SSE hub.
+type Deps struct {
+	Repo *store.Repo
+	Auth *auth.Authenticator
+}
 
 // NewRouter wires all routes and returns the root handler.
 func NewRouter(deps Deps) chi.Router {
@@ -29,6 +34,34 @@ func NewRouter(deps Deps) chi.Router {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusNotFound)
 			_ = json.NewEncoder(w).Encode(map[string]string{"error": "not found"})
+		})
+
+		// Public auth routes.
+		r.Post("/auth/login", deps.handleLogin)
+		r.Post("/auth/logout", deps.handleLogout)
+
+		// Everything below requires a valid session.
+		r.Group(func(r chi.Router) {
+			r.Use(requireUser(deps))
+			r.Get("/auth/me", deps.handleMe)
+			r.Post("/projects", deps.handleCreateProject)
+			r.Get("/projects", deps.handleListProjects)
+			r.Get("/projects/{projectID}", deps.handleGetProject)
+			r.Patch("/projects/{projectID}", deps.handlePatchProject)
+			r.Post("/projects/{projectID}/environments", deps.handleCreateEnvironment)
+			r.Get("/projects/{projectID}/environments", deps.handleListEnvironments)
+			// The /environments/{envID}... routes below are addressable by
+			// bare env id with no project-scope/ownership check — fine under
+			// single-tenant P1, but they'll need project-scoped authorization
+			// once P1b introduces per-user/per-project scoping.
+			r.Get("/environments/{envID}", deps.handleGetEnvironment)
+			r.Get("/projects/{projectID}/schema", deps.handleGetSchema)
+			r.Put("/projects/{projectID}/schema", deps.handlePutSchema)
+			r.Get("/environments/{envID}/values", deps.handleGetValues)
+			r.Put("/environments/{envID}/values", deps.handlePutValues)
+			r.Get("/environments/{envID}/versions", deps.handleListVersions)
+			r.Post("/environments/{envID}/rollback", deps.handleRollback)
+			r.Get("/projects/{projectID}/audit", deps.handleListAudit)
 		})
 	})
 
