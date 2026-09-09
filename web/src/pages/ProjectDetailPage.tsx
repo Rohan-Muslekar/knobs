@@ -47,6 +47,9 @@ export function ProjectDetailPage() {
           <Link to={`/projects/${id}/schema`} className="text-sm text-primary hover:underline">
             Edit schema
           </Link>
+          <Link to={`/projects/${id}/audit`} className="text-sm text-primary hover:underline">
+            Audit log
+          </Link>
           <Button onClick={() => setCreateOpen(true)}>New environment</Button>
         </div>
       </div>
