@@ -1,11 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/lib/api";
 import type { Environment } from "@/hooks/useEnvironments";
+import type { Rule } from "@/types/targeting";
 
 export type ValuesResponse = {
   version: number;
   values: Record<string, unknown>;
   schemaVersion: number;
+  targeting?: Record<string, Rule[]>;
 };
 
 export function useEnvironment(envId: string) {
@@ -35,7 +37,7 @@ export function useValues(envId: string) {
 export function useSaveValues(envId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { values: Record<string, unknown> }) =>
+    mutationFn: (body: { values: Record<string, unknown>; targeting?: Record<string, Rule[]> }) =>
       api(`/v1/environments/${envId}/values`, { method: "PUT", body }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["values", envId] });
