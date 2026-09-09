@@ -51,7 +51,9 @@ func NewRouter(deps Deps) chi.Router {
 			r.Post("/projects/{projectID}/environments", deps.handleCreateEnvironment)
 			r.Get("/projects/{projectID}/environments", deps.handleListEnvironments)
 			r.Get("/environments/{envID}", deps.handleGetEnvironment)
-			// Later tasks add schema/value/version/audit routes here.
+			r.Get("/projects/{projectID}/schema", deps.handleGetSchema)
+			r.Put("/projects/{projectID}/schema", deps.handlePutSchema)
+			// Later tasks add value/version/audit routes here.
 		})
 	})
 
