@@ -6,13 +6,6 @@ import (
 	"github.com/Rohan-Muslekar/knobs/internal/schema"
 )
 
-// numericTypes are the field types eligible for the ordering operators
-// (gt/gte/lt/lte). duration values are lexically stored as strings but are
-// numeric in intent, so they're allowed here too.
-var numericTypes = map[string]bool{
-	"int": true, "float": true, "duration": true,
-}
-
 var allowedOperators = map[Operator]bool{
 	OpIn: true, OpNotIn: true, OpEq: true, OpNeq: true, OpContains: true,
 	OpGt: true, OpGte: true, OpLt: true, OpLte: true,
@@ -22,9 +15,14 @@ var allowedOperators = map[Operator]bool{
 // field, each rule must set exactly one of Value/Rollout, static and
 // rollout-variant values must satisfy the targeted field's subschema,
 // rollout weights must sum to more than zero, and condition operators must
-// be known (with the ordering operators restricted to numeric-ish fields).
-// Condition attribute names are not validated - the evaluation context is
-// open and may carry attributes the schema doesn't know about.
+// be known. A condition's operator is not restricted by the targeted
+// field's type: conditions test attributes on the caller-supplied
+// evaluation context, which has no schema, so an operator's validity can't
+// depend on what type the rule happens to be targeting. Condition attribute
+// names are likewise not validated - the context is open and may carry
+// attributes the schema doesn't know about. (A numeric operator paired with
+// a non-numeric context attribute simply never matches at evaluation time -
+// see Task 1's evaluator - so it's a harmless no-op, not an error.)
 //
 // A nil or empty m is valid. Errors are prefixed with the offending path,
 // e.g. targeting["maxRetries"].rules[0].variants[1].value: ...
@@ -65,7 +63,7 @@ func validateRule(path string, f schema.Field, rule Rule) error {
 	}
 
 	for i, cond := range rule.Conditions {
-		if err := validateCondition(f, cond); err != nil {
+		if err := validateCondition(cond); err != nil {
 			return fmt.Errorf("%s.conditions[%d]: %w", path, i, err)
 		}
 	}
@@ -94,15 +92,9 @@ func validateRollout(path string, f schema.Field, rollout *Rollout) error {
 	return nil
 }
 
-func validateCondition(f schema.Field, cond Condition) error {
+func validateCondition(cond Condition) error {
 	if !allowedOperators[cond.Operator] {
 		return fmt.Errorf("unknown operator %q", cond.Operator)
-	}
-	switch cond.Operator {
-	case OpGt, OpGte, OpLt, OpLte:
-		if !numericTypes[f.Type] {
-			return fmt.Errorf("operator %q is only valid on numeric fields, field %q is %q", cond.Operator, f.Name, f.Type)
-		}
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ func testDef() schema.Definition {
 		{Name: "featureX", Type: "bool"},
 		{Name: "tier", Type: "enum", EnumValues: []any{"gold", "silver"}},
 		{Name: "label", Type: "string", Pattern: "^[a-z]+$"},
+		{Name: "ttl", Type: "duration"},
 	}}
 }
 
@@ -193,18 +194,22 @@ func TestValidateRolloutEmptyVariants(t *testing.T) {
 	}
 }
 
-func TestValidateNumericOperatorOnStringField(t *testing.T) {
+func TestValidateNumericOperatorOnStringFieldIsAllowed(t *testing.T) {
+	// A condition's operator tests an open, caller-supplied context
+	// attribute - it has no relationship to the type of the field the rule
+	// is targeting. Targeting the string-valued "label" field with a
+	// gt-on-"age" condition is a legitimate rule (e.g. "adults see this
+	// label"), so it must be accepted.
 	m := targeting.Map{
 		"label": {
 			{
-				Conditions: []targeting.Condition{{Attribute: "score", Operator: targeting.OpGt, Values: []any{5}}},
+				Conditions: []targeting.Condition{{Attribute: "age", Operator: targeting.OpGt, Values: []any{18}}},
 				Value:      "abc",
 			},
 		},
 	}
-	err := targeting.Validate(testDef(), m)
-	if err == nil {
-		t.Fatal("expected error for numeric operator condition on a string-typed rule field")
+	if err := targeting.Validate(testDef(), m); err != nil {
+		t.Fatalf("numeric operator condition on a string-typed rule field should be allowed, got %v", err)
 	}
 }
 
@@ -233,6 +238,41 @@ func TestValidateUnknownOperator(t *testing.T) {
 	}
 	if err := targeting.Validate(testDef(), m); err == nil {
 		t.Fatal("expected error for unknown operator")
+	}
+}
+
+func TestValidateDurationValueValid(t *testing.T) {
+	m := targeting.Map{
+		"ttl": {{Value: "30s"}},
+	}
+	if err := targeting.Validate(testDef(), m); err != nil {
+		t.Fatalf("valid duration value rejected: %v", err)
+	}
+}
+
+func TestValidateDurationValueInvalid(t *testing.T) {
+	m := targeting.Map{
+		"ttl": {{Value: "nope"}},
+	}
+	err := targeting.Validate(testDef(), m)
+	if err == nil {
+		t.Fatal("expected error for malformed duration value")
+	}
+	if !strings.Contains(err.Error(), `targeting["ttl"].rules[0].value`) {
+		t.Fatalf("error should be path-prefixed, got %v", err)
+	}
+}
+
+func TestValidateStringPatternViolation(t *testing.T) {
+	m := targeting.Map{
+		"label": {{Value: "NOT-LOWERCASE"}},
+	}
+	err := targeting.Validate(testDef(), m)
+	if err == nil {
+		t.Fatal("expected error for value violating the field's pattern")
+	}
+	if !strings.Contains(err.Error(), `targeting["label"].rules[0].value`) {
+		t.Fatalf("error should be path-prefixed, got %v", err)
 	}
 }
 
