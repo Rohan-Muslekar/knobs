@@ -73,17 +73,20 @@ func (d Deps) handlePutValues(w http.ResponseWriter, r *http.Request) {
 	var newVersion store.ConfigVersion
 	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
 		// The schema read and the validation against it must happen under
-		// the same row lock a concurrent handlePutSchema takes, otherwise a
-		// schema tightening can commit in between this read and the write
-		// below and leave the environment's current version violating the
-		// now-current schema. GetOrInitSchema runs first so the row exists,
-		// then LockProjectSchema blocks until any other writer touching this
-		// project's schema has committed or rolled back.
-		currentSchema, e := d.Repo.GetOrInitSchema(r.Context(), tx, env.ProjectID)
-		if e != nil {
+		// the same row lock a concurrent handlePutSchema takes, and the read
+		// itself must happen as part of taking that lock, not before it.
+		// GetOrInitSchema only ensures the row exists (a plain, unlocked
+		// read); LockProjectSchema then does the FOR UPDATE read that is
+		// actually authoritative. Using GetOrInitSchema's result here
+		// instead would leave a window between that read and the lock where
+		// a concurrent schema tightening could commit, and this handler
+		// would validate against the stale, already-superseded schema
+		// despite "holding the lock" for everything after.
+		if _, e := d.Repo.GetOrInitSchema(r.Context(), tx, env.ProjectID); e != nil {
 			return e
 		}
-		if e := d.Repo.LockProjectSchema(r.Context(), tx, env.ProjectID); e != nil {
+		currentSchema, e := d.Repo.LockProjectSchema(r.Context(), tx, env.ProjectID)
+		if e != nil {
 			return e
 		}
 		compiled, e := schema.Compile(currentSchema.Definition)
