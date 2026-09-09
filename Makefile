@@ -1,4 +1,4 @@
-.PHONY: test test-integration build build-server build-web
+.PHONY: test test-integration build build-server build-web build-knobs
 
 test:
 	go test ./...
@@ -12,4 +12,7 @@ build-web:
 build-server:
 	go build -o bin/server ./cmd/server
 
-build: build-web build-server
+build-knobs:
+	go build -o bin/knobs ./cmd/knobs
+
+build: build-web build-server build-knobs
