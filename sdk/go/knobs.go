@@ -71,6 +71,16 @@ type Options struct {
 	HTTPClient *http.Client
 	// Logger receives drift warnings and other diagnostics. Defaults to slog.Default().
 	Logger *slog.Logger
+	// DisableDeltas opts out of incremental delta frames on the SSE stream.
+	// Deltas are ON by default (the zero value, false, keeps them enabled) —
+	// this is a disable flag rather than an "enable" one specifically so a
+	// bare Options{} still gets the smaller-payload behavior without every
+	// caller having to opt in. When enabled, the client requests
+	// ?deltas=1 on the stream URL and, on a "delta" frame, applies it on top
+	// of the in-memory snapshot (falling back to a full resync if the delta
+	// doesn't chain onto the client's current revision) instead of always
+	// waiting for/requesting a full snapshot body.
+	DisableDeltas bool
 }
 
 // withDefaults returns opts with the documented zero-value defaults filled in.
@@ -180,12 +190,16 @@ func (c *Client) startBackground() {
 // backoff whenever the connection drops. It returns once ctx is cancelled.
 func (c *Client) runStream(ctx context.Context) {
 	delay := initialReconnectDelay
+	useDeltas := !c.opts.DisableDeltas
 
 	for ctx.Err() == nil {
 		gotFrame := false
-		err := stream(ctx, c.opts, c.currentRevision(), func(snap Snapshot) {
+		err := stream(ctx, c.opts, c.currentRevision(), useDeltas, func(snap Snapshot) {
 			gotFrame = true
 			c.applySnapshot(snap)
+		}, func(d Delta) {
+			gotFrame = true
+			c.applyDeltaFrame(ctx, d)
 		})
 		if ctx.Err() != nil {
 			return
@@ -288,6 +302,36 @@ func (c *Client) applySnapshot(snap Snapshot) {
 
 	c.checkSchemaDrift(snap)
 	c.notifyListeners(snap.Values)
+}
+
+// applyDeltaFrame handles one "delta" frame from the stream. If it chains
+// cleanly onto the in-memory snapshot — d.From equals the Revision the
+// client currently holds, read under the same lock applySnapshot uses —
+// it computes the resulting snapshot with applyDelta and feeds it through
+// applySnapshot, so the revision-gate and listener notification run
+// through that single funnel exactly as a full snapshot frame would.
+//
+// If it doesn't chain (a dropped delta, a reordered frame, or a fresh
+// reconnect that's behind), that's the defensive case the wire contract
+// calls for a full resync on: refetch a full snapshot via fetchSnapshot and
+// apply that instead. A resync failure (network error, or the environment
+// having no values) is swallowed here the same way runPoll swallows one —
+// the stream's own reconnect loop, or the next poll tick, is the retry.
+func (c *Client) applyDeltaFrame(ctx context.Context, d Delta) {
+	c.mu.RLock()
+	current := c.current
+	c.mu.RUnlock()
+
+	if d.From == current.Revision {
+		c.applySnapshot(applyDelta(current, d))
+		return
+	}
+
+	snap, err := fetchSnapshot(ctx, c.opts, 0)
+	if err != nil || snap == nil {
+		return
+	}
+	c.applySnapshot(*snap)
 }
 
 // notifyListeners calls every registered OnChange callback with its own
