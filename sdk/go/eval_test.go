@@ -49,7 +49,7 @@ type resolveAllVector struct {
 }
 
 type vectorsFile struct {
-	RolloutVectors    rolloutVectors     `json:"rolloutVectors"`
+	RolloutVectors    []rolloutVectors   `json:"rolloutVectors"`
 	ResolveVectors    []resolveVector    `json:"resolveVectors"`
 	ResolveAllVectors []resolveAllVector `json:"resolveAllVectors"`
 }
@@ -74,18 +74,26 @@ func loadVectors(t *testing.T) vectorsFile {
 // file and must agree.
 func TestBucket_MatchesGoldenVectors(t *testing.T) {
 	vf := loadVectors(t)
-	rv := vf.RolloutVectors
-	rules := []Rule{{Rollout: &rv.Rollout}}
 
-	if len(rv.Cases) == 0 {
-		t.Fatal("rolloutVectors.cases is empty")
+	if len(vf.RolloutVectors) == 0 {
+		t.Fatal("rolloutVectors is empty")
 	}
 
-	for _, c := range rv.Cases {
-		t.Run(c.TargetingKey, func(t *testing.T) {
-			got := resolve(rv.Key, nil, rules, EvalContext{TargetingKey: c.TargetingKey})
-			if !reflect.DeepEqual(got, c.Expected) {
-				t.Errorf("bucket(%q) = %v, want %v", c.TargetingKey, got, c.Expected)
+	for _, rv := range vf.RolloutVectors {
+		t.Run(rv.Key, func(t *testing.T) {
+			rules := []Rule{{Rollout: &rv.Rollout}}
+
+			if len(rv.Cases) == 0 {
+				t.Fatal("rolloutVectors.cases is empty")
+			}
+
+			for _, c := range rv.Cases {
+				t.Run(c.TargetingKey, func(t *testing.T) {
+					got := resolve(rv.Key, nil, rules, EvalContext{TargetingKey: c.TargetingKey})
+					if !reflect.DeepEqual(got, c.Expected) {
+						t.Errorf("bucket(%q) = %v, want %v", c.TargetingKey, got, c.Expected)
+					}
+				})
 			}
 		})
 	}
