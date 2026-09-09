@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect } from "vitest";
 import { createMemoryRouter, RouterProvider } from "react-router-dom";
@@ -251,5 +251,98 @@ describe("EnvironmentPage", () => {
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/not valid json/i));
     expect(putCalled).toBe(false);
+  });
+
+  it("sends targeting rules for a field with content, omitting a field left as `[]`", async () => {
+    let saved: { values: Record<string, unknown>; targeting?: Record<string, unknown> } | null = null;
+    const rules = [{ conditions: [{ attribute: "country", operator: "in", values: ["US"] }], value: true }];
+    server.use(
+      envHandler,
+      versionsHandler,
+      schemaHandler,
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
+      ),
+      http.put("/v1/environments/e1/values", async ({ request }) => {
+        saved = (await request.json()) as typeof saved;
+        return HttpResponse.json({ version: 2, values: saved!.values, schemaVersion: 1 });
+      }),
+    );
+    renderEnvironmentPage();
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(3));
+
+    // Two fields on this schema -> two "Targeting" disclosures, in field order.
+    const toggles = screen.getAllByRole("button", { name: /targeting/i });
+    await userEvent.click(toggles[0]); // maxRetries
+    fireEvent.change(screen.getByLabelText("maxRetries targeting rules"), {
+      target: { value: JSON.stringify(rules) },
+    });
+
+    await userEvent.click(toggles[1]); // featureX
+    fireEvent.change(screen.getByLabelText("featureX targeting rules"), { target: { value: "[]" } });
+
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() =>
+      expect(saved).toEqual({ values: { maxRetries: 3, featureX: true }, targeting: { maxRetries: rules } }),
+    );
+  });
+
+  it("omits targeting from the request body entirely when every field is left blank", async () => {
+    let saved: { values: Record<string, unknown>; targeting?: Record<string, unknown> } | null = null;
+    server.use(
+      envHandler,
+      versionsHandler,
+      schemaHandler,
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
+      ),
+      http.put("/v1/environments/e1/values", async ({ request }) => {
+        saved = (await request.json()) as typeof saved;
+        return HttpResponse.json({ version: 2, values: saved!.values, schemaVersion: 1 });
+      }),
+    );
+    renderEnvironmentPage();
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(3));
+
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(saved).toEqual({ values: { maxRetries: 3, featureX: true } }));
+    expect(saved && "targeting" in saved).toBe(false);
+  });
+
+  it("maps a targeting[\"field\"] 422 to that field and shows it even if the section was collapsed", async () => {
+    server.use(
+      envHandler,
+      versionsHandler,
+      schemaHandler,
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
+      ),
+      http.put("/v1/environments/e1/values", () =>
+        HttpResponse.json(
+          { error: 'targeting["maxRetries"].rules[0].variants[1].value: weights must sum to 100' },
+          { status: 422 },
+        ),
+      ),
+    );
+    renderEnvironmentPage();
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(3));
+
+    const toggles = screen.getAllByRole("button", { name: /targeting/i });
+    await userEvent.click(toggles[0]); // open maxRetries' section
+    fireEvent.change(screen.getByLabelText("maxRetries targeting rules"), {
+      target: { value: '[{"value":true}]' },
+    });
+    await userEvent.click(toggles[0]); // collapse it again before saving
+    expect(screen.queryByLabelText("maxRetries targeting rules")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    // The field-level targeting error must render near the field, not just
+    // in the generic top-of-form banner — both should be present, and the
+    // field one must show even though its section was collapsed.
+    await waitFor(() => expect(screen.getAllByText(/weights must sum to 100/i)).toHaveLength(2));
+    expect(screen.getByLabelText("maxRetries targeting rules")).toBeInTheDocument();
   });
 });
