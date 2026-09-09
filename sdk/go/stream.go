@@ -26,7 +26,9 @@ const maxSSELineLength = 1024 * 1024 // 1MB
 // case they're joined with "\n" before parsing, matching the TS SDK. A frame
 // whose data doesn't unmarshal into a Snapshot is skipped rather than
 // treated as fatal, since one bad frame shouldn't take down a long-lived
-// connection.
+// connection. (This is a deliberate divergence from the TS SDK, which aborts
+// and reconnects on a malformed frame; here we keep reading, on the view that
+// a single corrupt event is more likely transient than a poisoned stream.)
 //
 // The request is built with http.NewRequestWithContext, so cancelling ctx
 // aborts the underlying connection and unblocks the read loop — stream then
