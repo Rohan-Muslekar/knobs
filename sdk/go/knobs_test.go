@@ -6,6 +6,12 @@ import (
 	"time"
 )
 
+// noPoll is a PollInterval long enough that the poll fallback ticker never
+// fires during these tests, so the only live-update path exercised is the
+// stream — keeping the revision-gate assertions unambiguous about which
+// path applied a snapshot.
+const noPoll = time.Hour
+
 func testContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
@@ -26,6 +32,7 @@ func TestReadyLoadsSnapshotForGetAndGetAll(t *testing.T) {
 	if err := c.Ready(testContext(t)); err != nil {
 		t.Fatalf("Ready() error = %v", err)
 	}
+	defer c.Close()
 
 	if v, ok := c.Get("foo"); !ok || v != "bar" {
 		t.Errorf("Get(%q) = (%v, %v), want (\"bar\", true)", "foo", v, ok)
@@ -55,6 +62,7 @@ func TestGetAllReturnsIsolatedCopy(t *testing.T) {
 	if err := c.Ready(testContext(t)); err != nil {
 		t.Fatalf("Ready() error = %v", err)
 	}
+	defer c.Close()
 
 	first := c.GetAll()
 	first["foo"] = "mutated"
@@ -82,6 +90,7 @@ func TestNotFoundSnapshotIsEmptyNotError(t *testing.T) {
 	if err := c.Ready(testContext(t)); err != nil {
 		t.Fatalf("Ready() error = %v, want nil on 404", err)
 	}
+	defer c.Close()
 
 	all := c.GetAll()
 	if len(all) != 0 {
@@ -111,6 +120,7 @@ func TestExpectedSchemaHashMismatchWarnsOnce(t *testing.T) {
 	if err := c.Ready(testContext(t)); err != nil {
 		t.Fatalf("Ready() error = %v", err)
 	}
+	defer c.Close()
 
 	if got := handler.warnCount(); got != 1 {
 		t.Errorf("warnCount() = %d, want 1", got)
@@ -139,6 +149,7 @@ func TestExpectedSchemaHashMatchDoesNotWarn(t *testing.T) {
 	if err := c.Ready(testContext(t)); err != nil {
 		t.Fatalf("Ready() error = %v", err)
 	}
+	defer c.Close()
 
 	if got := handler.warnCount(); got != 0 {
 		t.Errorf("warnCount() = %d, want 0 when hashes match", got)
@@ -160,6 +171,7 @@ func TestNotFoundWithExpectedSchemaHashDoesNotWarn(t *testing.T) {
 	if err := c.Ready(testContext(t)); err != nil {
 		t.Fatalf("Ready() error = %v", err)
 	}
+	defer c.Close()
 
 	if got := handler.warnCount(); got != 0 {
 		t.Errorf("warnCount() = %d, want 0 on an empty (404) snapshot", got)
@@ -175,6 +187,7 @@ func TestReadySendsBearerAuthHeader(t *testing.T) {
 	if err := c.Ready(testContext(t)); err != nil {
 		t.Fatalf("Ready() error = %v", err)
 	}
+	defer c.Close()
 
 	want := "Bearer super-secret-key"
 	if got := srv.authHeader(); got != want {
@@ -194,6 +207,7 @@ func TestReadyPreservesEndpointPathPrefix(t *testing.T) {
 	if err := c.Ready(testContext(t)); err != nil {
 		t.Fatalf("Ready() error = %v", err)
 	}
+	defer c.Close()
 
 	if v, ok := c.Get("foo"); !ok || v != "bar" {
 		t.Errorf("Get(\"foo\") = (%v, %v), want (\"bar\", true)", v, ok)
@@ -207,4 +221,141 @@ func TestCloseBeforeReadyIsSafe(t *testing.T) {
 	c := New(Options{Endpoint: "http://127.0.0.1:0", APIKey: "test-key"})
 	c.Close()
 	c.Close() // idempotent
+}
+
+func TestStreamedHigherRevisionUpdatesGetAllAndFiresOnChange(t *testing.T) {
+	srv := newTestServer("")
+	defer srv.Close()
+	srv.setSnapshot(Snapshot{Version: 1, Revision: 1, Values: map[string]any{"foo": "bar"}})
+
+	c := New(Options{Endpoint: srv.URL, APIKey: "test-key", PollInterval: noPoll})
+	if err := c.Ready(testContext(t)); err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	defer c.Close()
+
+	changed := make(chan map[string]any, 1)
+	unsub := c.OnChange(func(values map[string]any) { changed <- values })
+	defer unsub()
+
+	ch := srv.waitForStreamConn(t)
+	sendFrame(t, ch, `data: {"version":2,"revision":5,"schemaHash":"h","values":{"foo":"baz"}}`+"\n\n")
+
+	select {
+	case values := <-changed:
+		if values["foo"] != "baz" {
+			t.Fatalf("OnChange values = %v, want foo=baz", values)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for OnChange on a higher-revision frame")
+	}
+
+	if all := c.GetAll(); all["foo"] != "baz" {
+		t.Fatalf("GetAll()[\"foo\"] = %v, want %q", all["foo"], "baz")
+	}
+}
+
+func TestStreamedEqualOrLowerRevisionIsIgnored(t *testing.T) {
+	srv := newTestServer("")
+	defer srv.Close()
+	srv.setSnapshot(Snapshot{Version: 1, Revision: 10, Values: map[string]any{"foo": "bar"}})
+
+	c := New(Options{Endpoint: srv.URL, APIKey: "test-key", PollInterval: noPoll})
+	if err := c.Ready(testContext(t)); err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	defer c.Close()
+
+	fired := make(chan struct{}, 1)
+	unsub := c.OnChange(func(map[string]any) { fired <- struct{}{} })
+	defer unsub()
+
+	ch := srv.waitForStreamConn(t)
+	// Equal revision: a stale replay, must be ignored.
+	sendFrame(t, ch, `data: {"version":2,"revision":10,"schemaHash":"h","values":{"foo":"equal"}}`+"\n\n")
+	// Lower revision: also a stale replay, must be ignored.
+	sendFrame(t, ch, `data: {"version":2,"revision":5,"schemaHash":"h","values":{"foo":"lower"}}`+"\n\n")
+
+	select {
+	case <-fired:
+		t.Fatal("OnChange fired for an equal/lower-revision frame")
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	if all := c.GetAll(); all["foo"] != "bar" {
+		t.Fatalf("GetAll()[\"foo\"] = %v, want unchanged %q", all["foo"], "bar")
+	}
+}
+
+func TestStreamedRollbackHigherRevisionLowerVersionApplies(t *testing.T) {
+	srv := newTestServer("")
+	defer srv.Close()
+	srv.setSnapshot(Snapshot{Version: 5, Revision: 10, Values: map[string]any{"foo": "v5"}})
+
+	c := New(Options{Endpoint: srv.URL, APIKey: "test-key", PollInterval: noPoll})
+	if err := c.Ready(testContext(t)); err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	defer c.Close()
+
+	changed := make(chan map[string]any, 1)
+	unsub := c.OnChange(func(values map[string]any) { changed <- values })
+	defer unsub()
+
+	ch := srv.waitForStreamConn(t)
+	// Rollback: Version went DOWN (5 -> 3) but Revision went UP (10 -> 11) —
+	// must still apply, since revision (not version) is the dedup axis.
+	sendFrame(t, ch, `data: {"version":3,"revision":11,"schemaHash":"h","values":{"foo":"rolled-back"}}`+"\n\n")
+
+	select {
+	case values := <-changed:
+		if values["foo"] != "rolled-back" {
+			t.Fatalf("OnChange values = %v, want foo=rolled-back", values)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for OnChange on a rollback frame")
+	}
+
+	if all := c.GetAll(); all["foo"] != "rolled-back" {
+		t.Fatalf("GetAll()[\"foo\"] = %v, want %q", all["foo"], "rolled-back")
+	}
+}
+
+func TestCloseStopsStreamUpdatesAndReturnsPromptly(t *testing.T) {
+	srv := newTestServer("")
+	defer srv.Close()
+	srv.setSnapshot(Snapshot{Version: 1, Revision: 1, Values: map[string]any{"foo": "bar"}})
+
+	c := New(Options{Endpoint: srv.URL, APIKey: "test-key", PollInterval: noPoll})
+	if err := c.Ready(testContext(t)); err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+
+	ch := srv.waitForStreamConn(t)
+
+	closeDone := make(chan struct{})
+	go func() {
+		c.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close() did not return promptly")
+	}
+
+	// Best-effort: the connection may already be torn down by the time this
+	// runs, in which case the send below is simply dropped — either way, it
+	// must not change anything.
+	select {
+	case ch <- `data: {"version":2,"revision":99,"schemaHash":"h","values":{"foo":"should-not-apply"}}` + "\n\n":
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	time.Sleep(200 * time.Millisecond)
+	if all := c.GetAll(); all["foo"] != "bar" {
+		t.Fatalf("GetAll()[\"foo\"] = %v after Close(), want unchanged %q (a post-close frame applied)", all["foo"], "bar")
+	}
+
+	c.Close() // idempotent — must not hang or panic
 }

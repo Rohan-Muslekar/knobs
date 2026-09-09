@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"testing"
+	"time"
 )
 
 // testServer is a controllable fake of the delivery API's snapshot endpoint.
@@ -25,15 +27,98 @@ type testServer struct {
 	notFound      bool
 	lastAuth      string
 	unmatchedPath string
+
+	// streamConnReady receives a channel for every new /v1/stream connection,
+	// as soon as that connection's handler goroutine is up and blocked
+	// waiting for frames to write. A test drains one entry per connection it
+	// expects (via waitForStreamConn) and then sends raw SSE bytes into that
+	// channel (via sendFrame) to drive the connection deterministically —
+	// nothing is written to the wire until the test says so.
+	streamConnReady chan chan string
 }
 
 func newTestServer(prefix string) *testServer {
-	ts := &testServer{}
+	ts := &testServer{
+		streamConnReady: make(chan chan string, 8),
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(prefix+"/v1/snapshot", ts.handleSnapshot)
+	mux.HandleFunc(prefix+"/v1/stream", ts.handleStream)
 	mux.HandleFunc("/", ts.handleUnmatched)
 	ts.Server = httptest.NewServer(mux)
 	return ts
+}
+
+// handleStream serves a controllable SSE connection: it writes+flushes
+// nothing on its own, just registers a per-connection channel and relays
+// whatever raw bytes a test sends into it, until the request's context is
+// cancelled (the client disconnected, e.g. via Close) or the channel is
+// closed.
+func (ts *testServer) handleStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "stream: ResponseWriter doesn't support flushing", http.StatusInternalServerError)
+		return
+	}
+
+	ts.mu.Lock()
+	ts.lastAuth = r.Header.Get("Authorization")
+	ts.mu.Unlock()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	ch := make(chan string)
+	select {
+	case ts.streamConnReady <- ch:
+	case <-r.Context().Done():
+		return
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case chunk, ok := <-ch:
+			if !ok {
+				return
+			}
+			if _, err := w.Write([]byte(chunk)); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+// waitForStreamConn blocks until a client has connected to /v1/stream and
+// returns the channel a test can use (via sendFrame) to write raw SSE bytes
+// to that specific connection. Fails the test if no connection shows up
+// within a bounded window, so a wiring bug shows up as a fast test failure
+// rather than a hang.
+func (ts *testServer) waitForStreamConn(t *testing.T) chan string {
+	t.Helper()
+	select {
+	case ch := <-ts.streamConnReady:
+		return ch
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for a /v1/stream connection")
+		return nil
+	}
+}
+
+// sendFrame writes raw bytes (typically one SSE frame, or a fragment of
+// one) to a stream connection obtained from waitForStreamConn, blocking
+// until the connection's handler goroutine has picked it up. Fails the test
+// rather than hanging if that doesn't happen promptly.
+func sendFrame(t *testing.T, ch chan string, data string) {
+	t.Helper()
+	select {
+	case ch <- data:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out sending SSE frame — no active stream reader?")
+	}
 }
 
 func (ts *testServer) handleSnapshot(w http.ResponseWriter, r *http.Request) {
