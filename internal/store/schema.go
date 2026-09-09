@@ -67,6 +67,25 @@ func (r *Repo) UpdateSchema(ctx context.Context, db DBTX, projectID uuid.UUID, d
 	return cs, nil
 }
 
+// LockProjectSchema takes a FOR UPDATE row lock on the project's
+// config_schema row for the lifetime of tx, serializing it against any other
+// transaction locking the same row. Callers must call GetOrInitSchema (or
+// otherwise ensure the row exists) first in the same tx, since a missing row
+// has nothing to lock. Used to make schema writes and value writes mutually
+// exclusive per project, so a change-safety check and a value validation
+// never interleave against each other.
+func (r *Repo) LockProjectSchema(ctx context.Context, tx DBTX, projectID uuid.UUID) error {
+	var discard int
+	err := tx.QueryRow(ctx,
+		`SELECT 1 FROM config_schema WHERE project_id = $1 FOR UPDATE`,
+		projectID,
+	).Scan(&discard)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
 func (r *Repo) schemaByProjectID(ctx context.Context, db DBTX, projectID uuid.UUID) (ConfigSchema, error) {
 	var cs ConfigSchema
 	var defRaw []byte
