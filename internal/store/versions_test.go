@@ -98,4 +98,42 @@ func TestVersionsLifecycle(t *testing.T) {
 	if n3 != 3 {
 		t.Fatalf("next version (after v2) = %d, want 3", n3)
 	}
+
+	// ListVersions returns both versions, most recent first, with IsCurrent
+	// true only on v2 (the environment's current pointer).
+	versions, err := repo.ListVersions(ctx, repo.Pool(), env.ID)
+	if err != nil {
+		t.Fatalf("list versions: %v", err)
+	}
+	if len(versions) != 2 {
+		t.Fatalf("list versions len = %d, want 2", len(versions))
+	}
+	if versions[0].Version != 2 || !versions[0].IsCurrent {
+		t.Fatalf("versions[0] = %+v, want version 2, current", versions[0])
+	}
+	if versions[1].Version != 1 || versions[1].IsCurrent {
+		t.Fatalf("versions[1] = %+v, want version 1, not current", versions[1])
+	}
+	if versions[0].SchemaVersion != 1 {
+		t.Fatalf("versions[0].SchemaVersion = %d, want 1", versions[0].SchemaVersion)
+	}
+
+	// A rollback (repository-level: just SetCurrentVersion) flips IsCurrent
+	// back to v1 without touching either version's stored history.
+	if err := repo.SetCurrentVersion(ctx, repo.Pool(), env.ID, v1.ID); err != nil {
+		t.Fatalf("set current v1 (rollback): %v", err)
+	}
+	versionsAfterRollback, err := repo.ListVersions(ctx, repo.Pool(), env.ID)
+	if err != nil {
+		t.Fatalf("list versions after rollback: %v", err)
+	}
+	if len(versionsAfterRollback) != 2 {
+		t.Fatalf("list versions after rollback len = %d, want 2", len(versionsAfterRollback))
+	}
+	if versionsAfterRollback[0].Version != 2 || versionsAfterRollback[0].IsCurrent {
+		t.Fatalf("versionsAfterRollback[0] = %+v, want version 2, not current", versionsAfterRollback[0])
+	}
+	if versionsAfterRollback[1].Version != 1 || !versionsAfterRollback[1].IsCurrent {
+		t.Fatalf("versionsAfterRollback[1] = %+v, want version 1, current", versionsAfterRollback[1])
+	}
 }

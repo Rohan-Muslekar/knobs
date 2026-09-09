@@ -93,6 +93,45 @@ func (r *Repo) SetCurrentVersion(ctx context.Context, tx DBTX, envID, versionID 
 	return err
 }
 
+// ConfigVersionMeta is a history-listing view of a config_version row: it
+// carries everything ListVersions needs except the values blob, which is
+// deliberately omitted (callers wanting values use VersionByNumber).
+type ConfigVersionMeta struct {
+	ID            uuid.UUID
+	Version       int
+	SchemaVersion int
+	CreatedBy     *uuid.UUID
+	CreatedAt     time.Time
+	IsCurrent     bool
+}
+
+// ListVersions returns every version recorded for envID, most recent first.
+// IsCurrent is set on whichever row's id matches the environment's
+// current_version_id.
+func (r *Repo) ListVersions(ctx context.Context, db DBTX, envID uuid.UUID) ([]ConfigVersionMeta, error) {
+	rows, err := db.Query(ctx,
+		`SELECT cv.id, cv.version, cv.schema_version, cv.created_by, cv.created_at,
+		        cv.id = e.current_version_id AS is_current
+		 FROM config_version cv
+		 JOIN environment e ON e.id = cv.environment_id
+		 WHERE cv.environment_id = $1
+		 ORDER BY cv.version DESC`, envID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ConfigVersionMeta
+	for rows.Next() {
+		var m ConfigVersionMeta
+		if err := rows.Scan(&m.ID, &m.Version, &m.SchemaVersion, &m.CreatedBy, &m.CreatedAt, &m.IsCurrent); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
 // VersionByNumber loads a specific historical version by its (environment,
 // version) pair, regardless of whether it is still the environment's
 // current version. Returns ErrNotFound when no such version exists.
