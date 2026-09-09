@@ -57,6 +57,7 @@ func NewRouter(deps Deps) chi.Router {
 			r.Put("/environments/{envID}/values", deps.handlePutValues)
 			r.Get("/environments/{envID}/versions", deps.handleListVersions)
 			r.Post("/environments/{envID}/rollback", deps.handleRollback)
+			r.Get("/projects/{projectID}/audit", deps.handleListAudit)
 		})
 	})
 
