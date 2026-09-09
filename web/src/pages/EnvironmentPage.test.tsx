@@ -1,0 +1,178 @@
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, it, expect } from "vitest";
+import { createMemoryRouter, RouterProvider } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render } from "@testing-library/react";
+import { server, http, HttpResponse } from "@/test/msw";
+import { EnvironmentPage } from "@/pages/EnvironmentPage";
+import { Toaster } from "@/components/ui/sonner";
+
+function renderEnvironmentPage() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const router = createMemoryRouter([{ path: "/environments/:envId", element: <EnvironmentPage /> }], {
+    initialEntries: ["/environments/e1"],
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <RouterProvider router={router} />
+      <Toaster />
+    </QueryClientProvider>,
+  );
+}
+
+const envHandler = http.get("/v1/environments/e1", () =>
+  HttpResponse.json({
+    id: "e1",
+    projectId: "p1",
+    name: "production",
+    currentVersionId: "ver1",
+    createdAt: "2026-01-01T00:00:00Z",
+  }),
+);
+
+const schemaHandler = http.get("/v1/projects/p1/schema", () =>
+  HttpResponse.json({
+    definition: {
+      fields: [
+        { name: "maxRetries", type: "int", required: true },
+        { name: "featureX", type: "bool", required: false },
+      ],
+    },
+    schemaVersion: 1,
+  }),
+);
+
+describe("EnvironmentPage", () => {
+  it("renders both fields pre-filled from the current values", async () => {
+    server.use(
+      envHandler,
+      schemaHandler,
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
+      ),
+    );
+    renderEnvironmentPage();
+
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(3));
+    expect(screen.getByRole("switch", { name: "featureX" })).toBeChecked();
+  });
+
+  it("edits a value and saves; PUT fires with the new values", async () => {
+    let saved: { values: Record<string, unknown> } | null = null;
+    server.use(
+      envHandler,
+      schemaHandler,
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
+      ),
+      http.put("/v1/environments/e1/values", async ({ request }) => {
+        saved = (await request.json()) as { values: Record<string, unknown> };
+        return HttpResponse.json({ version: 2, values: saved.values, schemaVersion: 1 });
+      }),
+    );
+    renderEnvironmentPage();
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(3));
+
+    await userEvent.clear(screen.getByLabelText("maxRetries"));
+    await userEvent.type(screen.getByLabelText("maxRetries"), "5");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(saved).toEqual({ values: { maxRetries: 5, featureX: true } }));
+    await waitFor(() => expect(screen.getByText(/values saved/i)).toBeInTheDocument());
+  });
+
+  it("shows the server validation message on a 422", async () => {
+    server.use(
+      envHandler,
+      schemaHandler,
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
+      ),
+      http.put("/v1/environments/e1/values", () =>
+        HttpResponse.json({ error: "maxRetries: must be <= 5" }, { status: 422 }),
+      ),
+    );
+    renderEnvironmentPage();
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(3));
+
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/must be <= 5/i));
+  });
+
+  it("starts with an empty form when there are no values yet (404)", async () => {
+    server.use(
+      envHandler,
+      schemaHandler,
+      http.get("/v1/environments/e1/values", () => HttpResponse.json({ error: "not found" }, { status: 404 })),
+    );
+    renderEnvironmentPage();
+
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toBeInTheDocument());
+    expect(screen.getByLabelText("maxRetries")).toHaveValue(null);
+    expect(screen.getByRole("switch", { name: "featureX" })).not.toBeChecked();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("changes an enum value and saves; PUT fires with the new value", async () => {
+    let saved: { values: Record<string, unknown> } | null = null;
+    server.use(
+      envHandler,
+      http.get("/v1/projects/p1/schema", () =>
+        HttpResponse.json({
+          definition: { fields: [{ name: "tier", type: "enum", required: true, enumValues: ["gold", "silver"] }] },
+          schemaVersion: 1,
+        }),
+      ),
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { tier: "gold" }, schemaVersion: 1 }),
+      ),
+      http.put("/v1/environments/e1/values", async ({ request }) => {
+        saved = (await request.json()) as { values: Record<string, unknown> };
+        return HttpResponse.json({ version: 2, values: saved.values, schemaVersion: 1 });
+      }),
+    );
+    renderEnvironmentPage();
+
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "tier" })).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("combobox", { name: "tier" }));
+    await userEvent.click(await screen.findByRole("option", { name: "silver" }));
+
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(saved).toEqual({ values: { tier: "silver" } }));
+  });
+
+  it("blocks save on invalid JSON in a json field and never calls the API", async () => {
+    let putCalled = false;
+    server.use(
+      envHandler,
+      http.get("/v1/projects/p1/schema", () =>
+        HttpResponse.json({
+          definition: { fields: [{ name: "config", type: "json", required: false }] },
+          schemaVersion: 1,
+        }),
+      ),
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { config: { a: 1 } }, schemaVersion: 1 }),
+      ),
+      http.put("/v1/environments/e1/values", () => {
+        putCalled = true;
+        return HttpResponse.json({ version: 2, values: {}, schemaVersion: 1 });
+      }),
+    );
+    renderEnvironmentPage();
+
+    await waitFor(() => expect(screen.getByLabelText("config")).toHaveValue('{"a":1}'));
+
+    await userEvent.clear(screen.getByLabelText("config"));
+    // "{{" is user-event's escape for a literal "{" — this types the unclosed, invalid JSON `{bad`.
+    await userEvent.type(screen.getByLabelText("config"), "{{bad");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/not valid json/i));
+    expect(putCalled).toBe(false);
+  });
+});

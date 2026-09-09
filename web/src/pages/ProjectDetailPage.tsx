@@ -70,9 +70,9 @@ export function ProjectDetailPage() {
                 <TableCell className="font-medium">{env.name}</TableCell>
                 <TableCell>{new Date(env.createdAt).toLocaleDateString()}</TableCell>
                 <TableCell>
-                  <Button variant="outline" size="sm" disabled title="Coming in a future release">
+                  <Link to={`/environments/${env.id}`} className="text-sm text-primary hover:underline">
                     Configure
-                  </Button>
+                  </Link>
                 </TableCell>
               </TableRow>
             ))}
