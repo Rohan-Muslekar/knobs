@@ -38,7 +38,7 @@ interface ResolveAllVector {
 }
 
 interface VectorsFile {
-  rolloutVectors: RolloutVectors;
+  rolloutVectors: RolloutVectors[];
   resolveVectors: ResolveVector[];
   resolveAllVectors: ResolveAllVector[];
 }
@@ -46,15 +46,21 @@ interface VectorsFile {
 const vectors: VectorsFile = JSON.parse(readFileSync(vectorsPath, "utf8"));
 
 describe("bucket (golden vectors)", () => {
-  const { key, rollout, cases } = vectors.rolloutVectors;
-
-  it("has at least one case", () => {
-    expect(cases.length).toBeGreaterThan(0);
+  it("has at least one rollout vector set", () => {
+    expect(vectors.rolloutVectors.length).toBeGreaterThan(0);
   });
 
-  for (const c of cases) {
-    it(`buckets ${JSON.stringify(c.targetingKey)} to ${JSON.stringify(c.expected)}`, () => {
-      expect(bucket(rollout, key, c.targetingKey)).toEqual(c.expected);
+  for (const { key, rollout, cases } of vectors.rolloutVectors) {
+    describe(key, () => {
+      it("has at least one case", () => {
+        expect(cases.length).toBeGreaterThan(0);
+      });
+
+      for (const c of cases) {
+        it(`buckets ${JSON.stringify(c.targetingKey)} to ${JSON.stringify(c.expected)}`, () => {
+          expect(bucket(rollout, key, c.targetingKey)).toEqual(c.expected);
+        });
+      }
     });
   }
 });

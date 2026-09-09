@@ -84,6 +84,9 @@ func validateRollout(path string, f schema.Field, rollout *Rollout) error {
 		if err := schema.ValidateFieldValue(f, v.Value); err != nil {
 			return fmt.Errorf("%s.variants[%d].value: %w", path, i, err)
 		}
+		if v.Weight < 0 {
+			return fmt.Errorf("%s.rollout.variants[%d].weight: must not be negative", path, i)
+		}
 		totalWeight += v.Weight
 	}
 	if totalWeight <= 0 {

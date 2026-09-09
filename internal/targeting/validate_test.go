@@ -183,6 +183,31 @@ func TestValidateRolloutWeightsSumToZero(t *testing.T) {
 	}
 }
 
+func TestValidateRolloutNegativeVariantWeight(t *testing.T) {
+	m := targeting.Map{
+		"maxRetries": {
+			{
+				Rollout: &targeting.Rollout{
+					Variants: []targeting.Variant{
+						{Value: 1, Weight: -10},
+						{Value: 2, Weight: 20},
+					},
+				},
+			},
+		},
+	}
+	err := targeting.Validate(testDef(), m)
+	if err == nil {
+		t.Fatal("expected error for negative variant weight even though total weight is positive")
+	}
+	if !strings.Contains(err.Error(), `targeting["maxRetries"].rules[0].rollout.variants[0].weight`) {
+		t.Fatalf("error should be path-prefixed to the offending variant's weight, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "negative") {
+		t.Fatalf("error should mention the weight is negative, got %v", err)
+	}
+}
+
 func TestValidateRolloutEmptyVariants(t *testing.T) {
 	m := targeting.Map{
 		"featureX": {

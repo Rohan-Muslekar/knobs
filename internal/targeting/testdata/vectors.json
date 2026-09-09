@@ -1,70 +1,328 @@
 {
-  "rolloutVectors": {
-    "key": "flagA",
-    "rollout": {
-      "salt": "s",
-      "variants": [
+  "rolloutVectors": [
+    {
+      "key": "flagA",
+      "rollout": {
+        "salt": "s",
+        "variants": [
+          {
+            "value": "a",
+            "weight": 50
+          },
+          {
+            "value": "b",
+            "weight": 50
+          }
+        ]
+      },
+      "cases": [
         {
-          "value": "a",
-          "weight": 50
+          "targetingKey": "user-1",
+          "expected": "a"
         },
         {
-          "value": "b",
-          "weight": 50
+          "targetingKey": "user-2",
+          "expected": "b"
+        },
+        {
+          "targetingKey": "user-3",
+          "expected": "b"
+        },
+        {
+          "targetingKey": "user-4",
+          "expected": "a"
+        },
+        {
+          "targetingKey": "user-5",
+          "expected": "a"
+        },
+        {
+          "targetingKey": "user-6",
+          "expected": "b"
+        },
+        {
+          "targetingKey": "user-7",
+          "expected": "a"
+        },
+        {
+          "targetingKey": "user-8",
+          "expected": "a"
+        },
+        {
+          "targetingKey": "user-9",
+          "expected": "a"
+        },
+        {
+          "targetingKey": "user-10",
+          "expected": "a"
+        },
+        {
+          "targetingKey": "user-11",
+          "expected": "b"
+        },
+        {
+          "targetingKey": "user-12",
+          "expected": "b"
         }
       ]
     },
-    "cases": [
-      {
-        "targetingKey": "user-1",
-        "expected": "a"
+    {
+      "key": "rollout3variant",
+      "rollout": {
+        "salt": "r3v",
+        "variants": [
+          {
+            "value": "x",
+            "weight": 20
+          },
+          {
+            "value": "y",
+            "weight": 30
+          },
+          {
+            "value": "z",
+            "weight": 50
+          }
+        ]
       },
-      {
-        "targetingKey": "user-2",
-        "expected": "b"
+      "cases": [
+        {
+          "targetingKey": "user-1",
+          "expected": "z"
+        },
+        {
+          "targetingKey": "user-2",
+          "expected": "x"
+        },
+        {
+          "targetingKey": "user-3",
+          "expected": "z"
+        },
+        {
+          "targetingKey": "user-4",
+          "expected": "x"
+        },
+        {
+          "targetingKey": "user-5",
+          "expected": "z"
+        },
+        {
+          "targetingKey": "user-6",
+          "expected": "y"
+        },
+        {
+          "targetingKey": "user-7",
+          "expected": "x"
+        },
+        {
+          "targetingKey": "user-8",
+          "expected": "z"
+        },
+        {
+          "targetingKey": "user-9",
+          "expected": "z"
+        },
+        {
+          "targetingKey": "user-10",
+          "expected": "z"
+        }
+      ]
+    },
+    {
+      "key": "rolloutWeights1-1",
+      "rollout": {
+        "salt": "r11",
+        "variants": [
+          {
+            "value": "heads",
+            "weight": 1
+          },
+          {
+            "value": "tails",
+            "weight": 1
+          }
+        ]
       },
-      {
-        "targetingKey": "user-3",
-        "expected": "b"
+      "cases": [
+        {
+          "targetingKey": "user-1",
+          "expected": "tails"
+        },
+        {
+          "targetingKey": "user-2",
+          "expected": "heads"
+        },
+        {
+          "targetingKey": "user-3",
+          "expected": "heads"
+        },
+        {
+          "targetingKey": "user-4",
+          "expected": "heads"
+        },
+        {
+          "targetingKey": "user-5",
+          "expected": "heads"
+        },
+        {
+          "targetingKey": "user-6",
+          "expected": "tails"
+        },
+        {
+          "targetingKey": "user-7",
+          "expected": "heads"
+        },
+        {
+          "targetingKey": "user-8",
+          "expected": "tails"
+        }
+      ]
+    },
+    {
+      "key": "rolloutWeights2-3-5",
+      "rollout": {
+        "salt": "r235",
+        "variants": [
+          {
+            "value": "low",
+            "weight": 2
+          },
+          {
+            "value": "mid",
+            "weight": 3
+          },
+          {
+            "value": "high",
+            "weight": 5
+          }
+        ]
       },
-      {
-        "targetingKey": "user-4",
-        "expected": "a"
+      "cases": [
+        {
+          "targetingKey": "user-1",
+          "expected": "high"
+        },
+        {
+          "targetingKey": "user-2",
+          "expected": "high"
+        },
+        {
+          "targetingKey": "user-3",
+          "expected": "low"
+        },
+        {
+          "targetingKey": "user-4",
+          "expected": "high"
+        },
+        {
+          "targetingKey": "user-5",
+          "expected": "low"
+        },
+        {
+          "targetingKey": "user-6",
+          "expected": "high"
+        },
+        {
+          "targetingKey": "user-7",
+          "expected": "high"
+        },
+        {
+          "targetingKey": "user-8",
+          "expected": "high"
+        },
+        {
+          "targetingKey": "user-9",
+          "expected": "high"
+        },
+        {
+          "targetingKey": "user-10",
+          "expected": "high"
+        },
+        {
+          "targetingKey": "user-11",
+          "expected": "low"
+        },
+        {
+          "targetingKey": "user-12",
+          "expected": "mid"
+        },
+        {
+          "targetingKey": "user-13",
+          "expected": "low"
+        },
+        {
+          "targetingKey": "user-14",
+          "expected": "mid"
+        }
+      ]
+    },
+    {
+      "key": "rolloutFractionalWeights",
+      "rollout": {
+        "salt": "rfrac",
+        "variants": [
+          {
+            "value": "p",
+            "weight": 0.5
+          },
+          {
+            "value": "q",
+            "weight": 0.25
+          },
+          {
+            "value": "r",
+            "weight": 0.25
+          }
+        ]
       },
-      {
-        "targetingKey": "user-5",
-        "expected": "a"
-      },
-      {
-        "targetingKey": "user-6",
-        "expected": "b"
-      },
-      {
-        "targetingKey": "user-7",
-        "expected": "a"
-      },
-      {
-        "targetingKey": "user-8",
-        "expected": "a"
-      },
-      {
-        "targetingKey": "user-9",
-        "expected": "a"
-      },
-      {
-        "targetingKey": "user-10",
-        "expected": "a"
-      },
-      {
-        "targetingKey": "user-11",
-        "expected": "b"
-      },
-      {
-        "targetingKey": "user-12",
-        "expected": "b"
-      }
-    ]
-  },
+      "cases": [
+        {
+          "targetingKey": "user-1",
+          "expected": "r"
+        },
+        {
+          "targetingKey": "user-2",
+          "expected": "q"
+        },
+        {
+          "targetingKey": "user-3",
+          "expected": "p"
+        },
+        {
+          "targetingKey": "user-4",
+          "expected": "p"
+        },
+        {
+          "targetingKey": "user-5",
+          "expected": "p"
+        },
+        {
+          "targetingKey": "user-6",
+          "expected": "q"
+        },
+        {
+          "targetingKey": "user-7",
+          "expected": "r"
+        },
+        {
+          "targetingKey": "user-8",
+          "expected": "q"
+        },
+        {
+          "targetingKey": "",
+          "expected": "p"
+        },
+        {
+          "targetingKey": "😀",
+          "expected": "r"
+        },
+        {
+          "targetingKey": "café",
+          "expected": "p"
+        }
+      ]
+    }
+  ],
   "resolveVectors": [
     {
       "name": "no rules falls back to base",
