@@ -750,6 +750,20 @@ func TestStreamDeltaOptIn(t *testing.T) {
 // exercises for the non-delta path — the connection still has no baseline
 // to diff against, so the very first frame delivered off the Hub must be a
 // full "type":"snapshot" frame, not a delta.
+//
+// It does NOT assert that this first frame is quiet-then-the-v2-write, and
+// it does NOT wait on a specific revision. That coupling used to make the
+// test order-dependent: seedStreamFixture's own write (revision 1) fires a
+// pg_notify that can be delivered late — after this stream has already
+// subscribed — the same benign replay TestStreamHeartbeat documents and
+// tolerates. If that happens here, the late rev-1 snapshot is what actually
+// arrives first, and it lands as a full frame precisely because haveBaseline
+// is still false at that point — the property under test holds regardless
+// of which write produced the first frame. Asserting "no frame yet" (as this
+// test used to) or "the first frame is revision 2" both broke on that
+// replay; asserting only on the first frame's type does not. The v2 write
+// below just guarantees some frame arrives even when the seed's notify has
+// already been fully drained before this stream subscribed.
 func TestStreamDeltaNoBaselineSendsFullFrame(t *testing.T) {
 	router, cookie, _, _ := streamTestApp(t)
 	envID, key := seedStreamFixture(t, router, cookie)
@@ -774,14 +788,15 @@ func TestStreamDeltaNoBaselineSendsFullFrame(t *testing.T) {
 	}
 	frames := sseFrames(resp)
 
-	assertNoFrame(t, frames, 1*time.Second)
-
 	if rec := put(router, "/v1/environments/"+envID+"/values", `{"values":{"maxRetries":7}}`, cookie); rec.Code != http.StatusOK {
 		t.Fatalf("put values v2 = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
 
-	first := waitForVersion(t, frames, 10*time.Second, 2)
+	// Whatever arrives first — a late replay of the seed's revision-1
+	// notify, or the fan-out from the v2 write above — there's no baseline
+	// yet, so it must go out as a full snapshot frame, never a delta.
+	first := waitFrame(t, frames, 10*time.Second)
 	if got := first["type"]; got != "snapshot" {
-		t.Fatalf("first frame (no baseline yet) type = %v, want %q, not a delta", got, "snapshot")
+		t.Fatalf("first frame (no baseline yet) type = %v, want %q, not a delta (frame=%+v)", got, "snapshot", first)
 	}
 }
