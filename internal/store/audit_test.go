@@ -80,3 +80,44 @@ func TestListAudit(t *testing.T) {
 		t.Fatalf("list audit (other project) len = %d, want 0", len(empty))
 	}
 }
+
+func TestAuditSurvivesProjectDelete(t *testing.T) {
+	ctx := context.Background()
+	repo := store.New(migratedPool(t))
+
+	// Create a project and record audit entries.
+	p, err := repo.CreateProject(ctx, repo.Pool(), "Acme", "acme")
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	if err := repo.RecordAudit(ctx, repo.Pool(), p.ID, uuid.Nil, "project.create", p.ID.String(), map[string]any{"name": "Acme"}); err != nil {
+		t.Fatalf("record audit 1: %v", err)
+	}
+	if err := repo.RecordAudit(ctx, repo.Pool(), p.ID, uuid.Nil, "project.update", p.ID.String(), map[string]any{"field": "value"}); err != nil {
+		t.Fatalf("record audit 2: %v", err)
+	}
+
+	// Verify audit entries exist before delete.
+	entries, err := repo.ListAudit(ctx, repo.Pool(), p.ID, 100)
+	if err != nil {
+		t.Fatalf("list audit before delete: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("before delete: audit entries = %d, want 2", len(entries))
+	}
+
+	// Delete the project.
+	if _, err := repo.Pool().Exec(ctx, "DELETE FROM project WHERE id = $1", p.ID); err != nil {
+		t.Fatalf("delete project: %v", err)
+	}
+
+	// After migration: audit rows should survive with project_id IS NULL.
+	var count int64
+	if err := repo.Pool().QueryRow(ctx, "SELECT COUNT(*) FROM audit_log WHERE project_id IS NULL").Scan(&count); err != nil {
+		t.Fatalf("count null audit: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("audit entries after delete with SET NULL = %d, want 2", count)
+	}
+}
