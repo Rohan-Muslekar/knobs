@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ValueField } from "@/components/ValueField";
+import { VersionHistory } from "@/components/VersionHistory";
 import { useEnvironment, useSaveValues, useValues } from "@/hooks/useValues";
 import { useSchema } from "@/hooks/useSchema";
 import type { SchemaField } from "@/hooks/useSchema";
@@ -235,6 +236,8 @@ function EnvironmentEditor({
           {saveValues.isPending ? "Saving…" : "Save"}
         </Button>
       </div>
+
+      <VersionHistory envId={environmentId} />
     </div>
   );
 }

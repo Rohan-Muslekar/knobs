@@ -43,10 +43,17 @@ const schemaHandler = http.get("/v1/projects/p1/schema", () =>
   }),
 );
 
+const versionsHandler = http.get("/v1/environments/e1/versions", () =>
+  HttpResponse.json([
+    { id: "v1", version: 1, schemaVersion: 1, createdBy: "alice", createdAt: "2026-01-01T00:00:00Z", isCurrent: true },
+  ]),
+);
+
 describe("EnvironmentPage", () => {
   it("renders both fields pre-filled from the current values", async () => {
     server.use(
       envHandler,
+      versionsHandler,
       schemaHandler,
       http.get("/v1/environments/e1/values", () =>
         HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
@@ -62,6 +69,7 @@ describe("EnvironmentPage", () => {
     let saved: { values: Record<string, unknown> } | null = null;
     server.use(
       envHandler,
+      versionsHandler,
       schemaHandler,
       http.get("/v1/environments/e1/values", () =>
         HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
@@ -85,6 +93,7 @@ describe("EnvironmentPage", () => {
   it("shows the server validation message on a 422", async () => {
     server.use(
       envHandler,
+      versionsHandler,
       schemaHandler,
       http.get("/v1/environments/e1/values", () =>
         HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
@@ -104,6 +113,7 @@ describe("EnvironmentPage", () => {
   it("starts with an empty form when there are no values yet (404)", async () => {
     server.use(
       envHandler,
+      versionsHandler,
       schemaHandler,
       http.get("/v1/environments/e1/values", () => HttpResponse.json({ error: "not found" }, { status: 404 })),
     );
@@ -119,6 +129,7 @@ describe("EnvironmentPage", () => {
     let saved: { values: Record<string, unknown> } | null = null;
     server.use(
       envHandler,
+      versionsHandler,
       http.get("/v1/projects/p1/schema", () =>
         HttpResponse.json({
           definition: { fields: [{ name: "tier", type: "enum", required: true, enumValues: ["gold", "silver"] }] },
@@ -149,6 +160,7 @@ describe("EnvironmentPage", () => {
     let putCalled = false;
     server.use(
       envHandler,
+      versionsHandler,
       http.get("/v1/projects/p1/schema", () =>
         HttpResponse.json({
           definition: { fields: [{ name: "config", type: "json", required: false }] },
