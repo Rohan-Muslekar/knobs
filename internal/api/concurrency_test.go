@@ -22,14 +22,24 @@ import (
 // order that leaves environment.current_version pointing at values that
 // violate the now-current schema.
 //
+// The race requires the schema tightening to actually succeed (i.e. clear
+// change-safety) in the same window a value write is landing a value that
+// only the old, wider schema would accept. So each iteration starts the
+// environment at maxRetries:2 (valid under both max:5 and max:2) and races:
+//   - PUT schema tightening max: 5 -> 2 (passes change-safety: the live
+//     value 2 is valid under max:2)
+//   - PUT values {maxRetries:5} (valid under the old max:5, INVALID under
+//     the new max:2)
+//
 // Exact interleaving is timing-dependent, so this isn't a single
 // reproduction of the race — it's an invariant checked over many iterations:
 // whatever order the two concurrent writes actually land in, the
 // environment's current values must always validate against the current
-// schema afterwards. Pre-fix this could fail (rarely, given how tight the
-// window is); post-fix it must never fail, because both handlers now hold
-// the same config_schema row lock and so can never observe each other's
-// half-committed state.
+// schema afterwards. Pre-fix (schema read before the lock, not under it)
+// this can fail; post-fix (schema read as part of taking the lock) it must
+// never fail, because both handlers now hold the same config_schema row
+// lock around both the read and the write, so neither can act on a schema
+// already superseded by the other.
 func TestSchemaValueConcurrencyInvariant(t *testing.T) {
 	router, cookie, repo := seededRouter(t)
 
@@ -68,22 +78,27 @@ func TestSchemaValueConcurrencyInvariant(t *testing.T) {
 		t.Fatalf("parse env id: %v", err)
 	}
 
-	valuesAt5 := `{"values":{"maxRetries":5}}`
-	if rec := put(router, "/v1/environments/"+envIDStr+"/values", valuesAt5, cookie); rec.Code != http.StatusOK {
+	// The environment starts (and is reset every iteration) at maxRetries:2,
+	// which is valid under both the wide (max:5) and tight (max:2) schema —
+	// otherwise the tightening PUT would always be rejected by change-safety
+	// before the race even matters.
+	valuesAt2 := `{"values":{"maxRetries":2}}`
+	if rec := put(router, "/v1/environments/"+envIDStr+"/values", valuesAt2, cookie); rec.Code != http.StatusOK {
 		t.Fatalf("seed values = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
 
 	tightSchema := `{"fields":[{"name":"maxRetries","type":"int","required":true,"max":2}]}`
+	valuesAt5 := `{"values":{"maxRetries":5}}`
 
 	const iterations = 20
 	for i := 0; i < iterations; i++ {
 		// Reset to the known-consistent starting state before racing again:
-		// schema max back to 5, values back to maxRetries:5. Sequential, no
+		// schema back to max:5, values back to maxRetries:2. Sequential, no
 		// race here — these two must both land before the next race starts.
 		if rec := put(router, "/v1/projects/"+projectIDStr+"/schema", wideSchema, cookie); rec.Code != http.StatusOK {
 			t.Fatalf("iter %d: reset schema = %d, want 200, body=%s", i, rec.Code, rec.Body.String())
 		}
-		if rec := put(router, "/v1/environments/"+envIDStr+"/values", valuesAt5, cookie); rec.Code != http.StatusOK {
+		if rec := put(router, "/v1/environments/"+envIDStr+"/values", valuesAt2, cookie); rec.Code != http.StatusOK {
 			t.Fatalf("iter %d: reset values = %d, want 200, body=%s", i, rec.Code, rec.Body.String())
 		}
 
@@ -91,10 +106,14 @@ func TestSchemaValueConcurrencyInvariant(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
+			// Tightens max to 2; change-safety passes because the live
+			// value is 2.
 			put(router, "/v1/projects/"+projectIDStr+"/schema", tightSchema, cookie)
 		}()
 		go func() {
 			defer wg.Done()
+			// Valid under the current-at-request-time max:5, invalid under
+			// max:2 — the value the stale-read bug would let through.
 			put(router, "/v1/environments/"+envIDStr+"/values", valuesAt5, cookie)
 		}()
 

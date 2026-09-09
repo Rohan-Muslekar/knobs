@@ -81,7 +81,7 @@ func (d Deps) handlePutSchema(w http.ResponseWriter, r *http.Request) {
 		if _, e := d.Repo.GetOrInitSchema(r.Context(), tx, projectID); e != nil {
 			return e
 		}
-		if e := d.Repo.LockProjectSchema(r.Context(), tx, projectID); e != nil {
+		if _, e := d.Repo.LockProjectSchema(r.Context(), tx, projectID); e != nil {
 			return e
 		}
 
