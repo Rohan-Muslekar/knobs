@@ -87,7 +87,7 @@ func Run(ctx context.Context) error {
 
 	srv := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           api.NewRouter(api.Deps{Repo: repo, Auth: authr, Hub: hub, Shutdown: shutdownSignal}),
+		Handler:           api.NewRouter(api.Deps{Repo: repo, Auth: authr, Hub: hub, Shutdown: shutdownSignal, TrustProxy: cfg.TrustProxy}),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,

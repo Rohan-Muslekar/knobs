@@ -67,6 +67,40 @@ func (r *Repo) UpdateSchema(ctx context.Context, db DBTX, projectID uuid.UUID, d
 	return cs, nil
 }
 
+// LockProjectSchema takes a FOR UPDATE row lock on the project's
+// config_schema row for the lifetime of tx, serializing it against any other
+// transaction locking the same row, and returns the row as read under that
+// lock. Callers must call GetOrInitSchema (or otherwise ensure the row
+// exists) first in the same tx, since a missing row has nothing to lock.
+//
+// The read and the lock are done in the same query deliberately: a caller
+// that reads the schema (e.g. via GetOrInitSchema) and only locks
+// afterwards would still be racing a concurrent writer that commits in the
+// gap between that read and this call, leaving the caller validating
+// against a stale schema even though it "held the lock" for everything
+// after. Callers must use the ConfigSchema this returns — not any
+// pre-lock read — for anything that must be consistent with a concurrent
+// schema write.
+func (r *Repo) LockProjectSchema(ctx context.Context, tx DBTX, projectID uuid.UUID) (ConfigSchema, error) {
+	var cs ConfigSchema
+	var defRaw []byte
+	err := tx.QueryRow(ctx,
+		`SELECT project_id, definition, schema_version, updated_at
+		 FROM config_schema WHERE project_id = $1 FOR UPDATE`,
+		projectID,
+	).Scan(&cs.ProjectID, &defRaw, &cs.SchemaVersion, &cs.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ConfigSchema{}, ErrNotFound
+	}
+	if err != nil {
+		return ConfigSchema{}, err
+	}
+	if err := json.Unmarshal(defRaw, &cs.Definition); err != nil {
+		return ConfigSchema{}, err
+	}
+	return cs, nil
+}
+
 func (r *Repo) schemaByProjectID(ctx context.Context, db DBTX, projectID uuid.UUID) (ConfigSchema, error) {
 	var cs ConfigSchema
 	var defRaw []byte
