@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "./client.js";
-import type { Snapshot } from "./types.js";
+import type { Delta, Snapshot } from "./types.js";
 import { installFakeServer, type FakeServerHandle } from "./test/fakeServer.js";
 import { createControllableStream, type ControllableStream } from "./test/controllableStream.js";
 
@@ -22,6 +22,10 @@ function flush(): Promise<void> {
 
 function pushSnapshot(controllable: ControllableStream, snapshot: Snapshot): void {
   controllable.push(`data: ${JSON.stringify(snapshot)}\n\n`);
+}
+
+function pushDelta(controllable: ControllableStream, delta: Delta): void {
+  controllable.push(`data: ${JSON.stringify(delta)}\n\n`);
 }
 
 describe("createClient", () => {
@@ -455,6 +459,159 @@ describe("live streaming", () => {
     expect(warnSpy).toHaveBeenCalledTimes(2);
 
     client.close();
+    controllable.close();
+  });
+});
+
+describe("delta streaming", () => {
+  it("still applies a frame with type:\"snapshot\" (explicit type, same as a bare frame)", async () => {
+    const initial: Snapshot = { version: 1, revision: 1, schemaHash: "h", values: { a: 1 } };
+    const controllable = createControllableStream();
+    server = installFakeServer({
+      endpoint: ENDPOINT,
+      apiKey: API_KEY,
+      snapshot: { status: 200, body: initial },
+      stream: controllable,
+    });
+
+    const client = createClient({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" });
+    await client.ready();
+
+    controllable.push(
+      `data: ${JSON.stringify({ type: "snapshot", version: 2, revision: 2, schemaHash: "h", values: { a: 2 } })}\n\n`,
+    );
+    await flush();
+
+    expect(client.getAll()).toEqual({ a: 2 });
+
+    client.close();
+    controllable.close();
+  });
+
+  it("applies a delta frame whose from matches current.revision: merges values and fires onChange", async () => {
+    const initial: Snapshot = { version: 1, revision: 1, schemaHash: "h", values: { retries: 3, timeout: 30 } };
+    const controllable = createControllableStream();
+    server = installFakeServer({
+      endpoint: ENDPOINT,
+      apiKey: API_KEY,
+      snapshot: { status: 200, body: initial },
+      stream: controllable,
+    });
+
+    const onChange = vi.fn();
+    const client = createClient({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" });
+    client.onChange(onChange);
+    await client.ready();
+
+    const delta: Delta = {
+      type: "delta",
+      version: 1,
+      revision: 2,
+      from: 1,
+      schemaHash: "h",
+      values: { set: { retries: 5 }, remove: ["timeout"] },
+    };
+    pushDelta(controllable, delta);
+    await flush();
+
+    expect(client.getAll()).toEqual({ retries: 5 });
+    expect(client.get("retries")).toBe(5);
+    expect(client.get("timeout")).toBeUndefined();
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith({ retries: 5 });
+
+    client.close();
+    controllable.close();
+  });
+
+  it("applies consecutive deltas by chaining off the revision each one produces", async () => {
+    const initial: Snapshot = { version: 1, revision: 1, schemaHash: "h", values: { a: 1 } };
+    const controllable = createControllableStream();
+    server = installFakeServer({
+      endpoint: ENDPOINT,
+      apiKey: API_KEY,
+      snapshot: { status: 200, body: initial },
+      stream: controllable,
+    });
+
+    const client = createClient({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" });
+    await client.ready();
+
+    pushDelta(controllable, {
+      type: "delta",
+      version: 1,
+      revision: 2,
+      from: 1,
+      schemaHash: "h",
+      values: { set: { a: 2 } },
+    });
+    await flush();
+    expect(client.getAll()).toEqual({ a: 2 });
+
+    pushDelta(controllable, {
+      type: "delta",
+      version: 1,
+      revision: 3,
+      from: 2,
+      schemaHash: "h",
+      values: { set: { b: 3 } },
+    });
+    await flush();
+    expect(client.getAll()).toEqual({ a: 2, b: 3 });
+
+    client.close();
+    controllable.close();
+  });
+
+  it("falls back to a full resync when a delta's from doesn't match current.revision", async () => {
+    const initial: Snapshot = { version: 1, revision: 1, schemaHash: "h", values: { a: 1 } };
+    const resynced: Snapshot = { version: 5, revision: 20, schemaHash: "h", values: { a: "resynced" } };
+    const controllable = createControllableStream();
+
+    let snapshotCallCount = 0;
+    const stub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input.toString();
+      const headers = new Headers(init?.headers);
+      if (headers.get("authorization") !== `Bearer ${API_KEY}`) {
+        return new Response(JSON.stringify({ error: "authentication required" }), { status: 401 });
+      }
+      if (url.startsWith(`${ENDPOINT}/v1/stream`)) {
+        return new Response(controllable.stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      if (url.startsWith(`${ENDPOINT}/v1/snapshot`)) {
+        snapshotCallCount += 1;
+        const body = snapshotCallCount === 1 ? initial : resynced;
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = stub as unknown as typeof fetch;
+
+    const onChange = vi.fn();
+    const client = createClient({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" });
+    client.onChange(onChange);
+    await client.ready();
+    expect(snapshotCallCount).toBe(1);
+
+    // from=99 does not match current.revision (1) — a dropped-frame/race scenario the client
+    // must not blindly apply on top of; it should refetch and apply a full snapshot instead.
+    pushDelta(controllable, {
+      type: "delta",
+      version: 6,
+      revision: 21,
+      from: 99,
+      schemaHash: "h",
+      values: { set: { a: "should-not-apply-directly" } },
+    });
+    await flush();
+
+    expect(snapshotCallCount).toBe(2); // the resync refetch
+    expect(client.getAll()).toEqual({ a: "resynced" });
+    expect(onChange).toHaveBeenCalledWith({ a: "resynced" });
+
+    client.close();
+    globalThis.fetch = realFetch;
     controllable.close();
   });
 });
