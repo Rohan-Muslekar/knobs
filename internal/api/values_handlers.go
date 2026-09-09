@@ -3,12 +3,14 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/Rohan-Muslekar/knobs/internal/delivery"
 	"github.com/Rohan-Muslekar/knobs/internal/schema"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 )
@@ -96,8 +98,17 @@ func (d Deps) handlePutValues(w http.ResponseWriter, r *http.Request) {
 		if e := d.Repo.SetCurrentVersion(r.Context(), tx, env.ID, newVersion.ID); e != nil {
 			return e
 		}
-		return d.Repo.RecordAudit(r.Context(), tx, env.ProjectID, uid, "values.update", env.ID.String(),
-			map[string]any{"version": n})
+		if e := d.Repo.RecordAudit(r.Context(), tx, env.ProjectID, uid, "values.update", env.ID.String(),
+			map[string]any{"version": n}); e != nil {
+			return e
+		}
+		// Delivered on COMMIT (Postgres defers NOTIFY delivery until the
+		// transaction commits), so a rolled-back write never fires this —
+		// the Listener only ever sees notifications for versions that are
+		// actually live.
+		_, e = tx.Exec(r.Context(), "SELECT pg_notify($1, $2)", delivery.NotifyChannel,
+			fmt.Sprintf("%s:%d", env.ID, n))
+		return e
 	})
 	if err != nil {
 		// Two concurrent writes can both read the same NextVersionNumber and

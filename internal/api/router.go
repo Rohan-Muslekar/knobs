@@ -4,20 +4,44 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/Rohan-Muslekar/knobs/internal/auth"
+	"github.com/Rohan-Muslekar/knobs/internal/delivery"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 	"github.com/Rohan-Muslekar/knobs/web"
 )
 
-// Deps carries everything the HTTP layer needs. It grows as later phases add
-// the SSE hub.
+// Deps carries everything the HTTP layer needs.
 type Deps struct {
 	Repo *store.Repo
 	Auth *auth.Authenticator
+
+	// Hub fans out fresh Snapshots to GET /v1/stream subscribers. Required
+	// for handleStream; nil here would panic on the first stream request,
+	// which is acceptable since every real caller (app.Run) always
+	// constructs one.
+	Hub *delivery.Hub
+
+	// StreamHeartbeat overrides handleStream's SSE heartbeat interval.
+	// Zero means "use the production default" (see stream_handler.go) —
+	// tests set this to a short duration so they don't wait tens of
+	// seconds to observe a heartbeat.
+	StreamHeartbeat time.Duration
+
+	// Shutdown is closed to tell every open handleStream connection to
+	// return promptly instead of waiting on the next Hub publish or
+	// heartbeat. app.Run closes this before calling srv.Shutdown, so
+	// active SSE connections go idle up front rather than being the thing
+	// srv.Shutdown's timeout has to forcibly wait out (srv.Shutdown itself
+	// only ever waits out already-idle connections). A nil channel (the
+	// zero value, e.g. in tests that don't exercise shutdown) simply never
+	// fires — handleStream's select treats that case like any other never-
+	// ready channel.
+	Shutdown <-chan struct{}
 }
 
 // NewRouter wires all routes and returns the root handler.
@@ -76,6 +100,7 @@ func NewRouter(deps Deps) chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(apiKeyGuard(deps))
 			r.Get("/snapshot", deps.handleSnapshot)
+			r.Get("/stream", deps.handleStream)
 		})
 	})
 

@@ -3,11 +3,13 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/Rohan-Muslekar/knobs/internal/delivery"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 )
 
@@ -81,8 +83,15 @@ func (d Deps) handleRollback(w http.ResponseWriter, r *http.Request) {
 		if e := d.Repo.SetCurrentVersion(r.Context(), tx, env.ID, targetVersion.ID); e != nil {
 			return e
 		}
-		return d.Repo.RecordAudit(r.Context(), tx, env.ProjectID, uid, "values.rollback", env.ID.String(),
-			map[string]any{"to": target})
+		if e := d.Repo.RecordAudit(r.Context(), tx, env.ProjectID, uid, "values.rollback", env.ID.String(),
+			map[string]any{"to": target}); e != nil {
+			return e
+		}
+		// Delivered on COMMIT, same as the value-save path's notify: a
+		// rollback that fails to commit never notifies subscribers.
+		_, e = tx.Exec(r.Context(), "SELECT pg_notify($1, $2)", delivery.NotifyChannel,
+			fmt.Sprintf("%s:%d", env.ID, target))
+		return e
 	})
 	if errors.Is(err, store.ErrNotFound) {
 		writeErr(w, http.StatusNotFound, "unknown version")
