@@ -26,8 +26,9 @@ export function useRenameProject() {
   return useMutation({
     mutationFn: ({ id, name }: { id: string; name: string }) =>
       api<Project>(`/v1/projects/${id}`, { method: "PATCH", body: { name } }),
-    onSuccess: () => {
+    onSuccess: (_data, { id }) => {
       qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["project", id] });
     },
   });
 }

@@ -22,7 +22,7 @@ export function AppLayout({ email, children }: { email: string; children: ReactN
           <Button
             variant="outline"
             size="sm"
-            onClick={() => logout.mutate(undefined, { onSuccess: () => navigate("/login") })}
+            onClick={() => logout.mutate(undefined, { onSettled: () => navigate("/login") })}
           >
             Log out
           </Button>

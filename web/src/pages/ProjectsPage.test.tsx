@@ -82,4 +82,52 @@ describe("ProjectsPage", () => {
     // Dialog stays open on failure.
     expect(screen.getByLabelText(/slug/i)).toBeInTheDocument();
   });
+
+  it("renames a project and the new name appears after refetch", async () => {
+    let name = "Acme";
+    server.use(
+      http.get("/v1/projects", () =>
+        HttpResponse.json([{ id: "p1", name, slug: "acme", createdAt: "2026-01-01T00:00:00Z" }]),
+      ),
+      http.patch("/v1/projects/p1", async ({ request }) => {
+        const body = (await request.json()) as { name: string };
+        name = body.name;
+        return HttpResponse.json({ id: "p1", name, slug: "acme", createdAt: "2026-01-01T00:00:00Z" });
+      }),
+    );
+    renderProjects();
+    await waitFor(() => expect(screen.getByText("Acme")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /rename/i }));
+    const nameInput = screen.getByLabelText(/^name$/i);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "Acme Corp");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(screen.getByText("Acme Corp")).toBeInTheDocument());
+    // Dialog closed: its title is no longer on screen.
+    expect(screen.queryByText("Rename project", { selector: "[data-slot=dialog-title]" })).toBeNull();
+  });
+
+  it("shows an alert on a failed rename and keeps the dialog open", async () => {
+    server.use(
+      http.get("/v1/projects", () =>
+        HttpResponse.json([{ id: "p1", name: "Acme", slug: "acme", createdAt: "2026-01-01T00:00:00Z" }]),
+      ),
+      http.patch("/v1/projects/p1", () => HttpResponse.json({ error: "server error" }, { status: 500 })),
+    );
+    renderProjects();
+    await waitFor(() => expect(screen.getByText("Acme")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /rename/i }));
+    const nameInput = screen.getByLabelText(/^name$/i);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "Acme Corp");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/server error/i));
+    // Dialog stays open on failure.
+    expect(screen.getByLabelText(/^name$/i)).toBeInTheDocument();
+    expect(screen.getByText("Acme")).toBeInTheDocument();
+  });
 });
