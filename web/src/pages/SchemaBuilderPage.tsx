@@ -1,0 +1,143 @@
+import { useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { SchemaFieldRow } from "@/components/SchemaFieldRow";
+import { useSchema, useUpdateSchema } from "@/hooks/useSchema";
+import type { SchemaField } from "@/hooks/useSchema";
+import { ApiError } from "@/lib/api";
+
+function emptyField(): SchemaField {
+  return { name: "", type: "string", required: false };
+}
+
+function validateFields(fields: SchemaField[]): string | null {
+  const names = fields.map((f) => f.name.trim());
+  if (names.some((n) => n.length === 0)) return "Every field needs a name.";
+  if (new Set(names).size !== names.length) return "Field names must be unique.";
+  for (const field of fields) {
+    if (field.type === "enum" && (!field.enumValues || field.enumValues.length === 0)) {
+      return `Field "${field.name}" is an enum and needs at least one value.`;
+    }
+  }
+  return null;
+}
+
+export function SchemaBuilderPage() {
+  const { projectId } = useParams<{ projectId: string }>();
+  const id = projectId ?? "";
+  const schema = useSchema(id);
+
+  if (schema.isPending) {
+    return <div className="text-sm text-muted-foreground">Loading…</div>;
+  }
+
+  if (schema.isError || !schema.data) {
+    return (
+      <div role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        Failed to load schema.
+      </div>
+    );
+  }
+
+  return <SchemaEditor projectId={id} initialFields={schema.data.definition.fields} schemaVersion={schema.data.schemaVersion} />;
+}
+
+function SchemaEditor({
+  projectId,
+  initialFields,
+  schemaVersion,
+}: {
+  projectId: string;
+  initialFields: SchemaField[];
+  schemaVersion: number;
+}) {
+  const updateSchema = useUpdateSchema(projectId);
+  const [fields, setFields] = useState<SchemaField[]>(initialFields);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const updateField = (index: number, next: SchemaField) => {
+    setFields((prev) => prev.map((f, i) => (i === index ? next : f)));
+  };
+
+  const removeField = (index: number) => {
+    setFields((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const addField = () => {
+    setFields((prev) => [...prev, emptyField()]);
+  };
+
+  const onSave = async () => {
+    setFormError(null);
+    const validationError = validateFields(fields);
+    if (validationError) {
+      setFormError(validationError);
+      return;
+    }
+    try {
+      await updateSchema.mutateAsync({ fields });
+      toast.success("Schema saved");
+    } catch (err) {
+      if (err instanceof ApiError) {
+        setFormError(err.message);
+      } else {
+        setFormError("Something went wrong. Please try again.");
+      }
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">Schema</h1>
+          <p className="text-sm text-muted-foreground">Version {schemaVersion}</p>
+        </div>
+        <Link to={`/projects/${projectId}`} className="text-sm text-muted-foreground hover:text-foreground">
+          Back to project
+        </Link>
+      </div>
+
+      {formError && (
+        <div role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {formError}
+        </div>
+      )}
+
+      {fields.length === 0 && <div className="text-sm text-muted-foreground">No fields yet</div>}
+
+      {fields.length > 0 && (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Name</TableHead>
+              <TableHead>Type</TableHead>
+              <TableHead>Required</TableHead>
+              <TableHead>Constraints</TableHead>
+              <TableHead>Description</TableHead>
+              <TableHead>
+                <span className="sr-only">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {fields.map((field, index) => (
+              <SchemaFieldRow key={index} field={field} index={index} onChange={updateField} onRemove={removeField} />
+            ))}
+          </TableBody>
+        </Table>
+      )}
+
+      <div className="flex items-center gap-3">
+        <Button variant="outline" onClick={addField}>
+          Add field
+        </Button>
+        <Button onClick={onSave} disabled={updateSchema.isPending}>
+          {updateSchema.isPending ? "Saving…" : "Save schema"}
+        </Button>
+      </div>
+    </div>
+  );
+}
