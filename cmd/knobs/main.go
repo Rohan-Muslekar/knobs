@@ -56,10 +56,11 @@ Run "knobs gen -h" for the gen subcommand's flags.`)
 // and write it to --out (or stdout when --out is unset).
 func runGen(args []string, stdout io.Writer) error {
 	fs := flag.NewFlagSet("gen", flag.ContinueOnError)
-	lang := fs.String("lang", "", `target language for generated code (only "ts" is supported)`)
+	lang := fs.String("lang", "", `target language for generated code ("ts" or "go")`)
 	endpoint := fs.String("endpoint", "", "knobs server base URL, e.g. https://knobs.example.com")
 	apiKey := fs.String("api-key", "", "bearer API key scoped to the target environment")
 	out := fs.String("out", "", "output file path (default: stdout)")
+	pkg := fs.String("package", "knobsconfig", `Go package name for the generated file (--lang go only)`)
 	if err := fs.Parse(args); err != nil {
 		// -h/--help: flag.ContinueOnError already printed usage to fs.Output() and returns
 		// flag.ErrHelp here. That's a clean exit, not a failure — without this check it
@@ -71,8 +72,8 @@ func runGen(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	if *lang != "ts" {
-		return fmt.Errorf(`unsupported --lang %q: only "ts" is supported`, *lang)
+	if *lang != "ts" && *lang != "go" {
+		return fmt.Errorf(`unsupported --lang %q: only "ts" and "go" are supported`, *lang)
 	}
 	if *endpoint == "" {
 		return fmt.Errorf("--endpoint is required")
@@ -86,9 +87,18 @@ func runGen(args []string, stdout io.Writer) error {
 		return err
 	}
 
-	src, err := codegen.EmitTypeScript(def, schemaHash)
-	if err != nil {
-		return fmt.Errorf("generating typescript: %w", err)
+	var src string
+	switch *lang {
+	case "ts":
+		src, err = codegen.EmitTypeScript(def, schemaHash)
+		if err != nil {
+			return fmt.Errorf("generating typescript: %w", err)
+		}
+	case "go":
+		src, err = codegen.EmitGo(def, schemaHash, *pkg)
+		if err != nil {
+			return fmt.Errorf("generating go: %w", err)
+		}
 	}
 
 	if *out == "" {

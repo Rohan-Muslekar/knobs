@@ -1,7 +1,9 @@
 package codegen
 
 import (
+	"go/format"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -180,5 +182,201 @@ func TestEmitTypeScript_RequiredFieldIsNotOptional(t *testing.T) {
 	}
 	if strings.Contains(got, "enabled?:") {
 		t.Fatalf("required field must not be marked optional, got:\n%s", got)
+	}
+}
+
+// --- EmitGo ---
+
+func TestEmitGo_MatchesGolden(t *testing.T) {
+	got, err := EmitGo(fixtureDefinition(), "testhash123", "knobsconfig")
+	if err != nil {
+		t.Fatalf("EmitGo returned error: %v", err)
+	}
+
+	want, err := os.ReadFile("testdata/expected.gen.go")
+	if err != nil {
+		t.Fatalf("reading golden file: %v", err)
+	}
+
+	if got != string(want) {
+		t.Fatalf("EmitGo output does not match golden byte-for-byte.\n--- got ---\n%s\n--- want ---\n%s", got, string(want))
+	}
+}
+
+func TestEmitGo_OutputIsValidGo(t *testing.T) {
+	got, err := EmitGo(fixtureDefinition(), "testhash", "knobsconfig")
+	if err != nil {
+		t.Fatalf("EmitGo returned error: %v", err)
+	}
+
+	if _, err := format.Source([]byte(got)); err != nil {
+		t.Fatalf("EmitGo output is not valid Go: %v\n--- output ---\n%s", err, got)
+	}
+}
+
+func TestEmitGo_FieldTypeMapping(t *testing.T) {
+	got, err := EmitGo(fixtureDefinition(), "testhash", "knobsconfig")
+	if err != nil {
+		t.Fatalf("EmitGo returned error: %v", err)
+	}
+
+	cases := map[string]string{
+		"MaxRetries": "int64",   // int -> int64
+		"Threshold":  "float64", // float -> float64
+		"Enabled":    "bool",    // bool -> bool
+		"Name":       "string",  // string -> string
+		"Timeout":    "string",  // duration -> string
+		"Tier":       "string",  // enum -> string
+		"Metadata":   "any",     // json -> any
+	}
+	for field, wantType := range cases {
+		re := regexp.MustCompile(`(?m)^\s*` + field + `\s+` + wantType + `\s`)
+		if !re.MatchString(got) {
+			t.Fatalf("expected field %q typed %q in output, got:\n%s", field, wantType, got)
+		}
+	}
+}
+
+func TestEmitGo_JSONTagsCarryRealFieldNames(t *testing.T) {
+	got, err := EmitGo(fixtureDefinition(), "testhash", "knobsconfig")
+	if err != nil {
+		t.Fatalf("EmitGo returned error: %v", err)
+	}
+
+	for _, name := range []string{"name", "nickname", "maxRetries", "threshold", "enabled", "metadata", "timeout", "tier"} {
+		tag := `json:"` + name + `"`
+		if !strings.Contains(got, tag) {
+			t.Fatalf("expected json tag %q in output, got:\n%s", tag, got)
+		}
+	}
+}
+
+func TestEmitGo_SchemaHashConstAndTypedFunc(t *testing.T) {
+	got, err := EmitGo(fixtureDefinition(), "testhash123", "knobsconfig")
+	if err != nil {
+		t.Fatalf("EmitGo returned error: %v", err)
+	}
+
+	if !strings.Contains(got, `SchemaHash = "testhash123"`) {
+		t.Fatalf("expected SchemaHash const in output, got:\n%s", got)
+	}
+	if !strings.Contains(got, "func Typed(client interface{ GetAll() map[string]any }) (Config, error)") {
+		t.Fatalf("expected Typed accessor in output, got:\n%s", got)
+	}
+}
+
+func TestEmitGo_EnumWithoutValuesErrors(t *testing.T) {
+	def := schema.Definition{
+		Fields: []schema.Field{
+			{Name: "tier", Type: "enum", Required: true},
+		},
+	}
+
+	_, err := EmitGo(def, "hash", "knobsconfig")
+	if err == nil {
+		t.Fatal("expected an error for an enum field with no enumValues, got nil")
+	}
+}
+
+func TestEmitGo_NonIdentifierFieldNameBecomesValidPascalCase(t *testing.T) {
+	def := schema.Definition{
+		Fields: []schema.Field{
+			{Name: "max-retries", Type: "int", Required: true},
+		},
+	}
+
+	got, err := EmitGo(def, "hash", "knobsconfig")
+	if err != nil {
+		t.Fatalf("EmitGo returned error: %v", err)
+	}
+	if !strings.Contains(got, "MaxRetries") {
+		t.Fatalf("expected derived identifier MaxRetries in output, got:\n%s", got)
+	}
+	if !strings.Contains(got, `json:"max-retries"`) {
+		t.Fatalf(`expected json:"max-retries" tag preserving the real name, got:\n%s`, got)
+	}
+
+	if _, err := format.Source([]byte(got)); err != nil {
+		t.Fatalf("output with a non-identifier field name is not valid Go: %v\n%s", err, got)
+	}
+}
+
+func TestEmitGo_LeadingDigitFieldNameGetsPrefixed(t *testing.T) {
+	def := schema.Definition{
+		Fields: []schema.Field{
+			{Name: "2fa", Type: "bool", Required: true},
+		},
+	}
+
+	got, err := EmitGo(def, "hash", "knobsconfig")
+	if err != nil {
+		t.Fatalf("EmitGo returned error: %v", err)
+	}
+	if !strings.Contains(got, "Field2fa") {
+		t.Fatalf("expected derived identifier Field2fa in output, got:\n%s", got)
+	}
+	if !strings.Contains(got, `json:"2fa"`) {
+		t.Fatalf(`expected json:"2fa" tag preserving the real name, got:\n%s`, got)
+	}
+}
+
+func TestEmitGo_NameWithNoAlphanumericsErrors(t *testing.T) {
+	def := schema.Definition{
+		Fields: []schema.Field{
+			{Name: "---", Type: "string", Required: true},
+		},
+	}
+
+	_, err := EmitGo(def, "hash", "knobsconfig")
+	if err == nil {
+		t.Fatal("expected an error for a field name with no alphanumeric characters, got nil")
+	}
+}
+
+func TestEmitGo_CollidingDerivedIdentifiersErrors(t *testing.T) {
+	// "max-retries" and "maxRetries" are distinct, schema-valid field
+	// names (schema.ValidateDefinition only forbids exact duplicates),
+	// but both PascalCase to the same Go identifier, MaxRetries. That
+	// collision can't be caught by go/format.Source (it only parses and
+	// formats — a struct with a duplicate field name is syntactically
+	// fine and would only fail at the consumer's own `go build`), so
+	// EmitGo has to catch it itself before emitting.
+	def := schema.Definition{
+		Fields: []schema.Field{
+			{Name: "max-retries", Type: "int", Required: true},
+			{Name: "maxRetries", Type: "int", Required: true},
+		},
+	}
+
+	_, err := EmitGo(def, "hash", "knobsconfig")
+	if err == nil {
+		t.Fatal("expected an error when two field names derive the same Go identifier, got nil")
+	}
+	if !strings.Contains(err.Error(), "max-retries") || !strings.Contains(err.Error(), "maxRetries") {
+		t.Fatalf("expected the error to name both colliding fields, got: %v", err)
+	}
+}
+
+func TestEmitGo_DescriptionCommentInjectionIsNeutralized(t *testing.T) {
+	def := schema.Definition{
+		Fields: []schema.Field{
+			{
+				Name:        "evil",
+				Type:        "string",
+				Required:    true,
+				Description: "ok\nfunc Backdoor() {}",
+			},
+		},
+	}
+
+	got, err := EmitGo(def, "hash", "knobsconfig")
+	if err != nil {
+		t.Fatalf("EmitGo returned error: %v", err)
+	}
+	if strings.Contains(got, "\nfunc Backdoor() {}") {
+		t.Fatalf("description was not neutralized: it broke out of the doc comment as a top-level declaration:\n%s", got)
+	}
+	if _, err := format.Source([]byte(got)); err != nil {
+		t.Fatalf("output is not valid Go: %v\n%s", err, got)
 	}
 }
