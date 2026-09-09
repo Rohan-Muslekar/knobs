@@ -79,6 +79,13 @@ export function openStream(
       }
     } catch (err) {
       if (cancelled) return;
+      // Abort before notifying: a malformed frame (JSON.parse failure) lands here without
+      // ever going through cancel()/close(), so without this the fetch's reader/connection
+      // is left open — an orphaned stream that outlives this function. Aborting first (and
+      // synchronously, since the "abort" listener just flips `cancelled` and best-effort
+      // cancels the reader) releases it on every terminal path, not just the cancel() one,
+      // while still calling onError exactly once, same as before.
+      controller.abort();
       onError(err);
     }
   })();

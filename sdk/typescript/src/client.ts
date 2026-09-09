@@ -28,13 +28,33 @@ export function createClient(opts: KnobsOptions): KnobsClient {
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let reconnectDelay = INITIAL_RECONNECT_DELAY_MS;
+  // Tracks the last schemaHash we've already warned about, so a long-lived process polling
+  // a drifted schema every pollIntervalMs (or resuming the same drift on reconnect) doesn't
+  // spam the log — we only warn again when the hash actually changes. Seeded to `undefined`
+  // (distinct from any real hash, including "") so the very first check can still warn.
+  let lastWarnedSchemaHash: string | undefined;
+
+  // Warns on schemaHash drift at most once per distinct hash — shared by the first-load
+  // check and every later swap (stream/reconnect/poll), so the two call sites never
+  // double-warn the same hash.
+  function checkSchemaDrift(snapshot: Snapshot): void {
+    if (opts.expectedSchemaHash === undefined) return;
+    if (snapshot.schemaHash === opts.expectedSchemaHash) return;
+    if (snapshot.schemaHash === lastWarnedSchemaHash) return;
+    lastWarnedSchemaHash = snapshot.schemaHash;
+    console.warn(
+      `knobs: schemaHash mismatch — generated code expects "${opts.expectedSchemaHash}" but the server ` +
+        `is serving "${snapshot.schemaHash}". Regenerate types with \`knobs gen\`.`,
+    );
+  }
 
   // Swaps in `snapshot` only if it's strictly newer by revision, and notifies listeners.
   // Never dedupe/order by `version` — see the module doc comment above.
   function applySnapshot(snapshot: Snapshot): void {
     if (snapshot.revision <= current.revision) return;
     current = snapshot;
-    for (const cb of listeners) cb(current.values);
+    checkSchemaDrift(snapshot);
+    for (const cb of listeners) cb({ ...current.values });
   }
 
   function connectStream(): void {
@@ -93,11 +113,8 @@ export function createClient(opts: KnobsOptions): KnobsClient {
     // Only compare when a real snapshot loaded. A 404/empty-env or failed fetch falls back
     // to the empty sentinel (schemaHash: ""), which isn't a genuine drift signal — it just
     // means there's no schema-backed snapshot to compare against yet.
-    if (snapshot !== null && opts.expectedSchemaHash !== undefined && current.schemaHash !== opts.expectedSchemaHash) {
-      console.warn(
-        `knobs: schemaHash mismatch — generated code expects "${opts.expectedSchemaHash}" but the server ` +
-          `is serving "${current.schemaHash}". Regenerate types with \`knobs gen\`.`,
-      );
+    if (snapshot !== null) {
+      checkSchemaDrift(current);
     }
 
     // Documented choice: the initial load does NOT fire onChange. ready()/getAll() already
@@ -120,7 +137,9 @@ export function createClient(opts: KnobsOptions): KnobsClient {
     },
 
     getAll(): Record<string, unknown> {
-      return current.values;
+      // Shallow copy: `current.values` is the SDK's live in-memory snapshot, so handing it
+      // out by reference would let a consumer's mutation corrupt it. See onChange below.
+      return { ...current.values };
     },
 
     onChange(cb: (values: Record<string, unknown>) => void): () => void {

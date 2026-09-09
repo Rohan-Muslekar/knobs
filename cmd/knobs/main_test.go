@@ -109,3 +109,17 @@ func TestRunGen_MissingAPIKeyErrors(t *testing.T) {
 		t.Fatal("expected an error when --api-key is missing, got nil")
 	}
 }
+
+func TestRunGen_HelpFlagExitsCleanly(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"gen", "-h"}, &out); err != nil {
+		t.Fatalf("run() with -h should return nil (clean exit), got error: %v", err)
+	}
+}
+
+func TestRunGen_LongHelpFlagExitsCleanly(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"gen", "--help"}, &out); err != nil {
+		t.Fatalf("run() with --help should return nil (clean exit), got error: %v", err)
+	}
+}

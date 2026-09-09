@@ -201,6 +201,33 @@ describe("openStream", () => {
     controllable.close();
   });
 
+  it("aborts the underlying connection on a malformed frame, before onError fires", async () => {
+    const controllable = createControllableStream();
+    stubFetchWithStream(controllable);
+    const onSnapshot = vi.fn();
+    const callOrder: string[] = [];
+    const onError = vi.fn(() => {
+      // Recorded from inside the onError callback: proves the abort already happened by
+      // the time onError is invoked, not just "eventually" — the underlying connection is
+      // released on this terminal path, same as the cancel()-driven one.
+      callOrder.push(controllable.cancelled ? "aborted-then-onError" : "onError-before-abort");
+    });
+
+    const cancel = openStream({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" }, 0, onSnapshot, onError);
+
+    expect(controllable.cancelled).toBe(false);
+
+    controllable.push("data: {not valid json\n\n");
+    await flush();
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(controllable.cancelled).toBe(true);
+    expect(callOrder).toEqual(["aborted-then-onError"]);
+
+    cancel();
+    controllable.close();
+  });
+
   it("calls onError when the stream closes (server ended the connection)", async () => {
     const controllable = createControllableStream();
     stubFetchWithStream(controllable);
