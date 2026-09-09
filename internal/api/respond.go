@@ -3,7 +3,13 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/jackc/pgx/v5"
 )
+
+// pgxTx lets handlers reference the transaction type Repo.WithTx hands them
+// without each importing pgx directly.
+type pgxTx = pgx.Tx
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
