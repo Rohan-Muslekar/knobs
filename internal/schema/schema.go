@@ -138,6 +138,46 @@ func Compile(def Definition) (*jsonschema.Schema, error) {
 	return c.Compile("knobs://schema")
 }
 
+// CompileField builds a standalone validator for a single field, wrapping
+// f's subschema (as produced by fieldSchema) so a lone value - not just a
+// full values map - can be checked against it. Useful for validating
+// targeting-rule values, which live outside the config values map but must
+// still satisfy the field's type/min/max/pattern/enum constraints.
+func CompileField(f Field) (*jsonschema.Schema, error) {
+	raw, err := json.Marshal(fieldSchema(f))
+	if err != nil {
+		return nil, err
+	}
+	loaded, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	c := jsonschema.NewCompiler()
+	res := fmt.Sprintf("knobs://field/%s", f.Name)
+	if err := c.AddResource(res, loaded); err != nil {
+		return nil, err
+	}
+	return c.Compile(res)
+}
+
+// ValidateFieldValue checks a single value against f's subschema, returning
+// a readable error on violation.
+func ValidateFieldValue(f Field, value any) error {
+	compiled, err := CompileField(f)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	return compiled.Validate(inst)
+}
+
 // ValidateValues checks values against a compiled schema, returning a
 // readable error on violation.
 func ValidateValues(compiled *jsonschema.Schema, values map[string]any) error {

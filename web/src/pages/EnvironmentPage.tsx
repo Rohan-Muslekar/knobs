@@ -3,11 +3,13 @@ import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { TargetingEditor } from "@/components/TargetingEditor";
 import { ValueField } from "@/components/ValueField";
 import { VersionHistory } from "@/components/VersionHistory";
 import { useEnvironment, useSaveValues, useValues } from "@/hooks/useValues";
 import { useSchema } from "@/hooks/useSchema";
 import type { SchemaField } from "@/hooks/useSchema";
+import type { Rule } from "@/types/targeting";
 import { ApiError } from "@/lib/api";
 
 function initFormValues(fields: SchemaField[], current: Record<string, unknown> | undefined): Record<string, unknown> {
@@ -34,9 +36,29 @@ function initFormValues(fields: SchemaField[], current: Record<string, unknown> 
   return result;
 }
 
+function initTargetingValues(
+  fields: SchemaField[],
+  current: Record<string, Rule[]> | undefined,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const field of fields) {
+    const rules = current?.[field.name];
+    result[field.name] = rules && rules.length > 0 ? JSON.stringify(rules, null, 2) : "";
+  }
+  return result;
+}
+
 function fieldNamedInMessage(fields: SchemaField[], message: string): string | null {
   const match = fields.find((f) => message.includes(f.name));
   return match ? match.name : null;
+}
+
+// Server 422s on targeting are path-prefixed, e.g.
+// `targeting["maxRetries"].rules[0].variants[1].value: ...`.
+function targetingFieldNamedInMessage(fields: SchemaField[], message: string): string | null {
+  const match = message.match(/^targeting\["([^"]+)"\]/);
+  if (!match) return null;
+  return fields.some((f) => f.name === match[1]) ? match[1] : null;
 }
 
 export function EnvironmentPage() {
@@ -96,8 +118,10 @@ function EnvironmentEditorForm({
   // not yet touched falls back to the server-derived initial value below.
   // This avoids syncing async query data into state via an effect.
   const [edits, setEdits] = useState<Record<string, unknown>>({});
+  const [targetingEdits, setTargetingEdits] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [targetingErrors, setTargetingErrors] = useState<Record<string, string>>({});
 
   const fields = schema.data?.definition.fields ?? [];
 
@@ -132,13 +156,21 @@ function EnvironmentEditorForm({
   const initialValues = initFormValues(fields, values.data?.values);
   const formValues: Record<string, unknown> = { ...initialValues, ...edits };
 
+  const initialTargeting = initTargetingValues(fields, values.data?.targeting);
+  const targetingValues: Record<string, string> = { ...initialTargeting, ...targetingEdits };
+
   const updateField = (name: string, next: unknown) => {
     setEdits((prev) => ({ ...prev, [name]: next }));
+  };
+
+  const updateTargeting = (name: string, next: string) => {
+    setTargetingEdits((prev) => ({ ...prev, [name]: next }));
   };
 
   const onSave = async () => {
     setFormError(null);
     setFieldErrors({});
+    setTargetingErrors({});
 
     const payload: Record<string, unknown> = {};
     for (const field of fields) {
@@ -183,15 +215,46 @@ function EnvironmentEditorForm({
       payload[field.name] = text;
     }
 
+    const targeting: Record<string, Rule[]> = {};
+    for (const field of fields) {
+      const raw = targetingValues[field.name];
+      const text = typeof raw === "string" ? raw.trim() : "";
+      if (text === "") continue;
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        setTargetingErrors((prev) => ({ ...prev, [field.name]: "Invalid JSON." }));
+        setFormError(`"${field.name}" targeting rules are not valid JSON.`);
+        return;
+      }
+      if (!Array.isArray(parsed)) {
+        setTargetingErrors((prev) => ({ ...prev, [field.name]: "Targeting rules must be a JSON array." }));
+        setFormError(`"${field.name}" targeting rules must be a JSON array.`);
+        return;
+      }
+      if (parsed.length === 0) continue;
+      targeting[field.name] = parsed as Rule[];
+    }
+
     try {
-      await saveValues.mutateAsync({ values: payload });
+      await saveValues.mutateAsync(
+        Object.keys(targeting).length > 0 ? { values: payload, targeting } : { values: payload },
+      );
       setEdits({});
+      setTargetingEdits({});
       toast.success("Values saved");
     } catch (err) {
       if (err instanceof ApiError && err.status === 422) {
         setFormError(err.message);
-        const named = fieldNamedInMessage(fields, err.message);
-        if (named) setFieldErrors((prev) => ({ ...prev, [named]: err.message }));
+        const targetingField = targetingFieldNamedInMessage(fields, err.message);
+        if (targetingField) {
+          setTargetingErrors((prev) => ({ ...prev, [targetingField]: err.message }));
+        } else {
+          const named = fieldNamedInMessage(fields, err.message);
+          if (named) setFieldErrors((prev) => ({ ...prev, [named]: err.message }));
+        }
       } else if (err instanceof ApiError) {
         setFormError(err.message);
       } else {
@@ -236,6 +299,12 @@ function EnvironmentEditorForm({
               />
               {fieldErrors[field.name] && <p className="text-sm text-destructive">{fieldErrors[field.name]}</p>}
               {field.description && <p className="text-sm text-muted-foreground">{field.description}</p>}
+              <TargetingEditor
+                fieldName={field.name}
+                value={targetingValues[field.name] ?? ""}
+                onChange={(next) => updateTargeting(field.name, next)}
+                error={targetingErrors[field.name]}
+              />
             </div>
           ))}
         </div>
