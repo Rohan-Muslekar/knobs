@@ -21,6 +21,12 @@ export function TargetingEditor({
 }) {
   const hasContent = value.trim() !== "";
   const [open, setOpen] = useState(hasContent || Boolean(error));
+  // `open` only reflects the user's manual toggle (or the mount-time initial
+  // state). A 422 sets `error` on an already-mounted, possibly-collapsed
+  // instance — it does not remount (that only happens on a successful save,
+  // see EnvironmentPage's `key={values.data?.version}`) — so the section
+  // must also show whenever there's an error, regardless of `open`.
+  const expanded = open || Boolean(error);
 
   let ruleCount: number | null = 0;
   let parseError: string | null = null;
@@ -45,7 +51,7 @@ export function TargetingEditor({
         type="button"
         variant="ghost"
         size="sm"
-        aria-expanded={open}
+        aria-expanded={expanded}
         onClick={() => setOpen((prev) => !prev)}
         className="w-full justify-between rounded-lg"
       >
@@ -55,9 +61,9 @@ export function TargetingEditor({
             <span className="text-muted-foreground"> ({ruleCount} rule{ruleCount === 1 ? "" : "s"})</span>
           )}
         </span>
-        <ChevronDownIcon className={cn("size-4 transition-transform", open && "rotate-180")} />
+        <ChevronDownIcon className={cn("size-4 transition-transform", expanded && "rotate-180")} />
       </Button>
-      {open && (
+      {expanded && (
         <div className="flex flex-col gap-1.5 border-t border-border p-3">
           <Textarea
             aria-label={`${fieldName} targeting rules`}
