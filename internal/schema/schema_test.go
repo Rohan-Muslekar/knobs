@@ -104,6 +104,39 @@ func TestCompileStringPatternField(t *testing.T) {
 	}
 }
 
+func TestValidateFieldValueIntMinMax(t *testing.T) {
+	f0, f5 := 0.0, 5.0
+	f := schema.Field{Name: "maxRetries", Type: "int", Min: &f0, Max: &f5}
+	if err := schema.ValidateFieldValue(f, 3); err != nil {
+		t.Fatalf("in-range value rejected: %v", err)
+	}
+	if err := schema.ValidateFieldValue(f, 9); err == nil {
+		t.Fatal("value above max should fail")
+	}
+}
+
+func TestValidateFieldValueEnum(t *testing.T) {
+	f := schema.Field{Name: "tier", Type: "enum", EnumValues: []any{"gold", "silver"}}
+	if err := schema.ValidateFieldValue(f, "gold"); err != nil {
+		t.Fatalf("member value rejected: %v", err)
+	}
+	if err := schema.ValidateFieldValue(f, "bronze"); err == nil {
+		t.Fatal("non-member value should fail")
+	}
+}
+
+func TestCompileFieldDirect(t *testing.T) {
+	f0, f5 := 0.0, 5.0
+	f := schema.Field{Name: "maxRetries", Type: "int", Min: &f0, Max: &f5}
+	c, err := schema.CompileField(f)
+	if err != nil {
+		t.Fatalf("compile field: %v", err)
+	}
+	if c == nil {
+		t.Fatal("expected a non-nil compiled schema")
+	}
+}
+
 func TestCompileFloatMinMaxField(t *testing.T) {
 	zero, one := 0.0, 1.0
 	d := def(schema.Field{Name: "ratio", Type: "float", Min: &zero, Max: &one})
