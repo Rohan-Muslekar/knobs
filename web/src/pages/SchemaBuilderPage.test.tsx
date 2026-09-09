@@ -70,6 +70,50 @@ describe("SchemaBuilderPage", () => {
     await waitFor(() => expect(screen.getByText(/schema saved/i)).toBeInTheDocument());
   });
 
+  it("removes the right field from a mid-list Remove and saves the correct remaining fields", async () => {
+    let saved: unknown = null;
+    server.use(
+      http.get("/v1/projects/p1/schema", () =>
+        HttpResponse.json({
+          definition: {
+            fields: [
+              { name: "fieldA", type: "string", required: false },
+              { name: "fieldB", type: "string", required: false },
+              { name: "fieldC", type: "string", required: false },
+            ],
+          },
+          schemaVersion: 1,
+        }),
+      ),
+      http.put("/v1/projects/p1/schema", async ({ request }) => {
+        saved = await request.json();
+        return HttpResponse.json({ definition: saved, schemaVersion: 2 });
+      }),
+    );
+    renderSchemaBuilder();
+    await waitFor(() => expect(screen.getByDisplayValue("fieldB")).toBeInTheDocument());
+
+    // Remove the middle row (fieldB) and confirm the remaining rows are fieldA and fieldC,
+    // not index-shifted duplicates/ghosts of fieldB.
+    const rows = screen.getAllByTestId(/field-row-/);
+    await userEvent.click(within(rows[1]).getByRole("button", { name: /remove/i }));
+
+    await waitFor(() => expect(screen.queryByDisplayValue("fieldB")).toBeNull());
+    expect(screen.getByDisplayValue("fieldA")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("fieldC")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /save schema/i }));
+
+    await waitFor(() =>
+      expect(saved).toEqual({
+        fields: [
+          { name: "fieldA", type: "string", required: false },
+          { name: "fieldC", type: "string", required: false },
+        ],
+      }),
+    );
+  });
+
   it("shows a 409 change-safety alert naming the offending environment", async () => {
     server.use(
       http.get("/v1/projects/p1/schema", () =>
