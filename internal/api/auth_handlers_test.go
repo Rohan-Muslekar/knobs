@@ -100,3 +100,14 @@ func get(h http.Handler, path, cookie string) *httptest.ResponseRecorder {
 	h.ServeHTTP(rec, req)
 	return rec
 }
+
+func patch(h http.Handler, path, body, cookie string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPatch, path, bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	if cookie != "" {
+		req.AddCookie(&http.Cookie{Name: auth.CookieName(), Value: cookie})
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}

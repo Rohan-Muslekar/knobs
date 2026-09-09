@@ -44,7 +44,11 @@ func NewRouter(deps Deps) chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(requireUser(deps))
 			r.Get("/auth/me", deps.handleMe)
-			// Later tasks add project/environment/schema/value/version/audit routes here.
+			r.Post("/projects", deps.handleCreateProject)
+			r.Get("/projects", deps.handleListProjects)
+			r.Get("/projects/{projectID}", deps.handleGetProject)
+			r.Patch("/projects/{projectID}", deps.handlePatchProject)
+			// Later tasks add environment/schema/value/version/audit routes here.
 		})
 	})
 
