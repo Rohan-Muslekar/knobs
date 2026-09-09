@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CreateEnvironmentDialog } from "@/components/CreateEnvironmentDialog";
@@ -43,7 +43,12 @@ export function ProjectDetailPage() {
           <h1 className="text-xl font-semibold">{project.data.name}</h1>
           <p className="text-sm text-muted-foreground">{project.data.slug}</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>New environment</Button>
+        <div className="flex items-center gap-3">
+          <Link to={`/projects/${id}/schema`} className="text-sm text-primary hover:underline">
+            Edit schema
+          </Link>
+          <Button onClick={() => setCreateOpen(true)}>New environment</Button>
+        </div>
       </div>
 
       {envs.length === 0 && <div className="text-sm text-muted-foreground">No environments yet</div>}
