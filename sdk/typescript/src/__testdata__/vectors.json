@@ -1,0 +1,628 @@
+{
+  "rolloutVectors": {
+    "key": "flagA",
+    "rollout": {
+      "salt": "s",
+      "variants": [
+        {
+          "value": "a",
+          "weight": 50
+        },
+        {
+          "value": "b",
+          "weight": 50
+        }
+      ]
+    },
+    "cases": [
+      {
+        "targetingKey": "user-1",
+        "expected": "a"
+      },
+      {
+        "targetingKey": "user-2",
+        "expected": "b"
+      },
+      {
+        "targetingKey": "user-3",
+        "expected": "b"
+      },
+      {
+        "targetingKey": "user-4",
+        "expected": "a"
+      },
+      {
+        "targetingKey": "user-5",
+        "expected": "a"
+      },
+      {
+        "targetingKey": "user-6",
+        "expected": "b"
+      },
+      {
+        "targetingKey": "user-7",
+        "expected": "a"
+      },
+      {
+        "targetingKey": "user-8",
+        "expected": "a"
+      },
+      {
+        "targetingKey": "user-9",
+        "expected": "a"
+      },
+      {
+        "targetingKey": "user-10",
+        "expected": "a"
+      },
+      {
+        "targetingKey": "user-11",
+        "expected": "b"
+      },
+      {
+        "targetingKey": "user-12",
+        "expected": "b"
+      }
+    ]
+  },
+  "resolveVectors": [
+    {
+      "name": "no rules falls back to base",
+      "key": "no-rules-flag",
+      "base": "base-value",
+      "rules": null,
+      "context": {
+        "targetingKey": "user-1"
+      },
+      "expected": "base-value"
+    },
+    {
+      "name": "empty conditions is a catch-all default rule",
+      "key": "catch-all-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "value": "matched"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1"
+      },
+      "expected": "matched"
+    },
+    {
+      "name": "eq condition matches",
+      "key": "eq-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "plan",
+              "operator": "eq",
+              "values": [
+                "pro"
+              ]
+            }
+          ],
+          "value": "pro-value"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "plan": "pro"
+        }
+      },
+      "expected": "pro-value"
+    },
+    {
+      "name": "eq condition does not match falls back to base",
+      "key": "eq-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "plan",
+              "operator": "eq",
+              "values": [
+                "pro"
+              ]
+            }
+          ],
+          "value": "pro-value"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "plan": "free"
+        }
+      },
+      "expected": "base-value"
+    },
+    {
+      "name": "neq condition matches",
+      "key": "neq-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "plan",
+              "operator": "neq",
+              "values": [
+                "pro"
+              ]
+            }
+          ],
+          "value": "not-pro-value"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "plan": "free"
+        }
+      },
+      "expected": "not-pro-value"
+    },
+    {
+      "name": "in condition matches",
+      "key": "in-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "country",
+              "operator": "in",
+              "values": [
+                "IN",
+                "US"
+              ]
+            }
+          ],
+          "value": "allowed"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "country": "US"
+        }
+      },
+      "expected": "allowed"
+    },
+    {
+      "name": "in condition on missing attribute does not match",
+      "key": "in-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "country",
+              "operator": "in",
+              "values": [
+                "IN",
+                "US"
+              ]
+            }
+          ],
+          "value": "allowed"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1"
+      },
+      "expected": "base-value"
+    },
+    {
+      "name": "notIn condition matches when attribute present and excluded",
+      "key": "notin-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "country",
+              "operator": "notIn",
+              "values": [
+                "IN",
+                "US"
+              ]
+            }
+          ],
+          "value": "blocked"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "country": "FR"
+        }
+      },
+      "expected": "blocked"
+    },
+    {
+      "name": "notIn condition matches when attribute missing",
+      "key": "notin-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "country",
+              "operator": "notIn",
+              "values": [
+                "IN",
+                "US"
+              ]
+            }
+          ],
+          "value": "blocked"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1"
+      },
+      "expected": "blocked"
+    },
+    {
+      "name": "contains condition matches substring",
+      "key": "contains-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "email",
+              "operator": "contains",
+              "values": [
+                "@acme.com"
+              ]
+            }
+          ],
+          "value": "internal"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "email": "dev@acme.com"
+        }
+      },
+      "expected": "internal"
+    },
+    {
+      "name": "gt condition matches numeric attribute",
+      "key": "gt-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "age",
+              "operator": "gt",
+              "values": [
+                18
+              ]
+            }
+          ],
+          "value": "adult"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "age": 21
+        }
+      },
+      "expected": "adult"
+    },
+    {
+      "name": "gte condition matches numeric attribute at boundary",
+      "key": "gte-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "age",
+              "operator": "gte",
+              "values": [
+                18
+              ]
+            }
+          ],
+          "value": "adult"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "age": 18
+        }
+      },
+      "expected": "adult"
+    },
+    {
+      "name": "lt condition matches numeric attribute",
+      "key": "lt-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "age",
+              "operator": "lt",
+              "values": [
+                18
+              ]
+            }
+          ],
+          "value": "minor"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "age": 12
+        }
+      },
+      "expected": "minor"
+    },
+    {
+      "name": "lte condition matches numeric attribute at boundary",
+      "key": "lte-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "age",
+              "operator": "lte",
+              "values": [
+                18
+              ]
+            }
+          ],
+          "value": "minor-or-18"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "age": 18
+        }
+      },
+      "expected": "minor-or-18"
+    },
+    {
+      "name": "numeric operator on non-numeric attribute does not match",
+      "key": "gt-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "age",
+              "operator": "gt",
+              "values": [
+                18
+              ]
+            }
+          ],
+          "value": "adult"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "age": "not-a-number"
+        }
+      },
+      "expected": "base-value"
+    },
+    {
+      "name": "first matching rule wins over later rules",
+      "key": "ordering-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "plan",
+              "operator": "eq",
+              "values": [
+                "pro"
+              ]
+            }
+          ],
+          "value": "pro-value"
+        },
+        {
+          "value": "catch-all-value"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "plan": "pro"
+        }
+      },
+      "expected": "pro-value"
+    },
+    {
+      "name": "earlier non-matching rule falls through to later matching rule",
+      "key": "ordering-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "plan",
+              "operator": "eq",
+              "values": [
+                "pro"
+              ]
+            }
+          ],
+          "value": "pro-value"
+        },
+        {
+          "value": "catch-all-value"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "plan": "free"
+        }
+      },
+      "expected": "catch-all-value"
+    },
+    {
+      "name": "matching rule with rollout resolves the bucketed variant",
+      "key": "rollout-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "beta",
+              "operator": "eq",
+              "values": [
+                true
+              ]
+            }
+          ],
+          "rollout": {
+            "salt": "s",
+            "variants": [
+              {
+                "value": "a",
+                "weight": 50
+              },
+              {
+                "value": "b",
+                "weight": 50
+              }
+            ]
+          }
+        }
+      ],
+      "context": {
+        "targetingKey": "user-7",
+        "attributes": {
+          "beta": true
+        }
+      },
+      "expected": "a"
+    },
+    {
+      "name": "rollout with empty targeting key resolves to first variant",
+      "key": "rollout-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "rollout": {
+            "salt": "s",
+            "variants": [
+              {
+                "value": "a",
+                "weight": 50
+              },
+              {
+                "value": "b",
+                "weight": 50
+              }
+            ]
+          }
+        }
+      ],
+      "context": {
+        "targetingKey": ""
+      },
+      "expected": "a"
+    },
+    {
+      "name": "multi-condition rule requires all conditions to match",
+      "key": "multi-cond-flag",
+      "base": "base-value",
+      "rules": [
+        {
+          "conditions": [
+            {
+              "attribute": "plan",
+              "operator": "eq",
+              "values": [
+                "pro"
+              ]
+            },
+            {
+              "attribute": "country",
+              "operator": "in",
+              "values": [
+                "IN",
+                "US"
+              ]
+            }
+          ],
+          "value": "pro-and-allowed"
+        }
+      ],
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "country": "DE",
+          "plan": "pro"
+        }
+      },
+      "expected": "base-value"
+    }
+  ],
+  "resolveAllVectors": [
+    {
+      "name": "resolves every key present in base or rules, base-only key untouched",
+      "base": {
+        "flagA": "base-a",
+        "flagB": "base-b"
+      },
+      "rules": {
+        "flagA": [
+          {
+            "conditions": [
+              {
+                "attribute": "plan",
+                "operator": "eq",
+                "values": [
+                  "pro"
+                ]
+              }
+            ],
+            "value": "pro-a"
+          }
+        ],
+        "flagOnlyInRules": [
+          {
+            "value": "rules-only-value"
+          }
+        ]
+      },
+      "context": {
+        "targetingKey": "user-1",
+        "attributes": {
+          "plan": "pro"
+        }
+      },
+      "expected": {
+        "flagA": "pro-a",
+        "flagB": "base-b",
+        "flagOnlyInRules": "rules-only-value"
+      }
+    }
+  ]
+}
