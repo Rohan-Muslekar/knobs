@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { Snapshot } from "../types.js";
+import type { ControllableStream } from "./controllableStream.js";
 
 /** A scripted response for the fake `/v1/snapshot` endpoint. */
 export type ScriptedSnapshotResponse =
@@ -11,6 +12,14 @@ export interface FakeServerOptions {
   endpoint: string;
   apiKey: string;
   snapshot: ScriptedSnapshotResponse;
+  /**
+   * Optional: serves `GET {endpoint}/v1/stream` with this controllable SSE body (push
+   * frames onto it from the test). Omit for tests that don't exercise streaming — a stream
+   * request then fails the same way any unscripted URL does, which client.ts's streaming
+   * lifecycle treats as a connect error and reconnects from (harmlessly cancelled by the
+   * test's `client.close()`).
+   */
+  stream?: ControllableStream;
 }
 
 export interface CapturedRequest {
@@ -40,11 +49,25 @@ export function installFakeServer(opts: FakeServerOptions): FakeServerHandle {
     const headers = toHeaders(input, init);
     requests.push({ url, headers });
 
+    const authHeader = headers.get("authorization");
+
+    if (url.startsWith(`${opts.endpoint}/v1/stream`)) {
+      if (authHeader !== `Bearer ${opts.apiKey}`) {
+        return jsonResponse(401, { error: "authentication required" });
+      }
+      if (!opts.stream) {
+        throw new Error(`fakeServer: no script for ${url}`);
+      }
+      return new Response(opts.stream.stream, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    }
+
     if (!url.startsWith(`${opts.endpoint}/v1/snapshot`)) {
       throw new Error(`fakeServer: no script for ${url}`);
     }
 
-    const authHeader = headers.get("authorization");
     if (authHeader !== `Bearer ${opts.apiKey}`) {
       return jsonResponse(401, { error: "authentication required" });
     }
