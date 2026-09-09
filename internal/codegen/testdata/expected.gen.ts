@@ -16,5 +16,5 @@ export interface AppConfig {
 export const schemaHash = "testhash123";
 
 export function typed(client: { getAll(): Record<string, unknown> }): AppConfig {
-  return client.getAll() as AppConfig;
+  return client.getAll() as unknown as AppConfig;
 }

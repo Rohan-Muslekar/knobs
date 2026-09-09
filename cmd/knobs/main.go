@@ -5,6 +5,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -60,6 +61,13 @@ func runGen(args []string, stdout io.Writer) error {
 	apiKey := fs.String("api-key", "", "bearer API key scoped to the target environment")
 	out := fs.String("out", "", "output file path (default: stdout)")
 	if err := fs.Parse(args); err != nil {
+		// -h/--help: flag.ContinueOnError already printed usage to fs.Output() and returns
+		// flag.ErrHelp here. That's a clean exit, not a failure — without this check it
+		// propagates to main() as an error and `knobs gen -h` exits non-zero with a
+		// redundant "knobs: flag: help requested" line after the usage text.
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 

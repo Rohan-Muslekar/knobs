@@ -91,7 +91,7 @@ func EmitTypeScript(def schema.Definition, schemaHash string) (string, error) {
 	b.WriteString("}\n\n")
 	fmt.Fprintf(&b, "export const schemaHash = %q;\n\n", schemaHash)
 	b.WriteString("export function typed(client: { getAll(): Record<string, unknown> }): AppConfig {\n")
-	b.WriteString("  return client.getAll() as AppConfig;\n")
+	b.WriteString("  return client.getAll() as unknown as AppConfig;\n")
 	b.WriteString("}\n")
 
 	return b.String(), nil

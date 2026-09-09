@@ -148,6 +148,24 @@ describe("createClient", () => {
     client.close();
   });
 
+  it("getAll() returns a copy — mutating it does not corrupt the SDK's in-memory snapshot", async () => {
+    const snapshot: Snapshot = { version: 1, revision: 1, schemaHash: "h", values: { a: 1 } };
+    server = installFakeServer({ endpoint: ENDPOINT, apiKey: API_KEY, snapshot: { status: 200, body: snapshot } });
+
+    const client = createClient({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" });
+    await client.ready();
+
+    const first = client.getAll();
+    first.a = "mutated";
+    (first as Record<string, unknown>).injected = true;
+
+    expect(client.getAll()).toEqual({ a: 1 });
+    expect(client.get("a")).toBe(1);
+    expect(client.getAll()).not.toBe(first);
+
+    client.close();
+  });
+
   it("onChange registers a listener and returns an unsubscribe function (no fire on first load)", async () => {
     const snapshot: Snapshot = { version: 1, revision: 1, schemaHash: "h", values: { a: 1 } };
     server = installFakeServer({ endpoint: ENDPOINT, apiKey: API_KEY, snapshot: { status: 200, body: snapshot } });
@@ -327,6 +345,116 @@ describe("live streaming", () => {
     expect(snapshotCallCount).toBe(countAtClose); // poll timer was cleared by close()
 
     globalThis.fetch = realFetch;
+    controllable.close();
+  });
+
+  it("passes onChange listeners a copy of the values — mutating it does not corrupt the snapshot", async () => {
+    const initial: Snapshot = { version: 1, revision: 1, schemaHash: "h", values: { a: 1 } };
+    const controllable = createControllableStream();
+    server = installFakeServer({
+      endpoint: ENDPOINT,
+      apiKey: API_KEY,
+      snapshot: { status: 200, body: initial },
+      stream: controllable,
+    });
+
+    let received: Record<string, unknown> | undefined;
+    const client = createClient({ endpoint: ENDPOINT, apiKey: API_KEY, environment: "prod" });
+    client.onChange((values) => {
+      received = values;
+    });
+    await client.ready();
+
+    const higher: Snapshot = { version: 2, revision: 2, schemaHash: "h", values: { a: 2 } };
+    pushSnapshot(controllable, higher);
+    await flush();
+
+    expect(received).toEqual({ a: 2 });
+    received!.a = "mutated";
+    expect(client.getAll()).toEqual({ a: 2 }); // mutating the delivered object left the snapshot intact
+
+    client.close();
+    controllable.close();
+  });
+
+  it("re-checks schemaHash drift on later swaps: warns once per distinct hash, not once per interval", async () => {
+    const initial: Snapshot = { version: 1, revision: 1, schemaHash: "matching-hash", values: { a: 1 } };
+    const controllable = createControllableStream();
+    server = installFakeServer({
+      endpoint: ENDPOINT,
+      apiKey: API_KEY,
+      snapshot: { status: 200, body: initial },
+      stream: controllable,
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const client = createClient({
+      endpoint: ENDPOINT,
+      apiKey: API_KEY,
+      environment: "prod",
+      expectedSchemaHash: "matching-hash",
+    });
+    await client.ready();
+
+    // First load matched, so no warning yet.
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    // A schema change arrives via the stream mid-process (e.g. a long-lived NestJS service) —
+    // its schemaHash now differs from expectedSchemaHash. Must warn exactly once.
+    const drifted: Snapshot = { version: 2, revision: 2, schemaHash: "drifted-hash", values: { a: 2 } };
+    pushSnapshot(controllable, drifted);
+    await flush();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain("schemaHash");
+
+    // A later swap carrying the SAME drifted hash (e.g. the belt-and-suspenders poll
+    // re-fetching the still-drifted schema, or a reconnect resend) must not warn again.
+    const stillDrifted: Snapshot = { version: 2, revision: 3, schemaHash: "drifted-hash", values: { a: 3 } };
+    pushSnapshot(controllable, stillDrifted);
+    await flush();
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    client.close();
+    controllable.close();
+  });
+
+  it("warns again if the schema drifts to a NEW distinct hash after an earlier drift warning", async () => {
+    const initial: Snapshot = { version: 1, revision: 1, schemaHash: "actual-hash", values: { a: 1 } };
+    const controllable = createControllableStream();
+    server = installFakeServer({
+      endpoint: ENDPOINT,
+      apiKey: API_KEY,
+      snapshot: { status: 200, body: initial },
+      stream: controllable,
+    });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const client = createClient({
+      endpoint: ENDPOINT,
+      apiKey: API_KEY,
+      environment: "prod",
+      expectedSchemaHash: "expected-hash",
+    });
+    await client.ready();
+
+    // First-load drift already warns once (existing behavior).
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    // A second swap with the SAME hash as the first-load drift must not double-warn.
+    const sameHash: Snapshot = { version: 1, revision: 2, schemaHash: "actual-hash", values: { a: 2 } };
+    pushSnapshot(controllable, sameHash);
+    await flush();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    // A THIRD swap with a newly different hash must warn again.
+    const newHash: Snapshot = { version: 1, revision: 3, schemaHash: "yet-another-hash", values: { a: 3 } };
+    pushSnapshot(controllable, newHash);
+    await flush();
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+
+    client.close();
     controllable.close();
   });
 });

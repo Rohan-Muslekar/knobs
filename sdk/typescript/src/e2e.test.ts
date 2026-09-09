@@ -35,7 +35,7 @@ interface AppConfig {
 }
 
 function typed(client: { getAll(): Record<string, unknown> }): AppConfig {
-  return client.getAll() as AppConfig;
+  return client.getAll() as unknown as AppConfig;
 }
 
 describe("SDK e2e: createClient -> ready -> stream update -> close", () => {
