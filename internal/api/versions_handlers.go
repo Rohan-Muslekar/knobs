@@ -80,7 +80,8 @@ func (d Deps) handleRollback(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return e
 		}
-		if e := d.Repo.SetCurrentVersion(r.Context(), tx, env.ID, targetVersion.ID); e != nil {
+		revision, e := d.Repo.SetCurrentVersion(r.Context(), tx, env.ID, targetVersion.ID)
+		if e != nil {
 			return e
 		}
 		if e := d.Repo.RecordAudit(r.Context(), tx, env.ProjectID, uid, "values.rollback", env.ID.String(),
@@ -88,9 +89,14 @@ func (d Deps) handleRollback(w http.ResponseWriter, r *http.Request) {
 			return e
 		}
 		// Delivered on COMMIT, same as the value-save path's notify: a
-		// rollback that fails to commit never notifies subscribers.
+		// rollback that fails to commit never notifies subscribers. Rollback
+		// still bumps delivery_revision via SetCurrentVersion — that's the
+		// whole point of the revision axis: the config version can move
+		// backwards on rollback, but the delivery revision never does, so
+		// this notify carries the revision, not the (possibly lower) target
+		// version.
 		_, e = tx.Exec(r.Context(), "SELECT pg_notify($1, $2)", delivery.NotifyChannel,
-			fmt.Sprintf("%s:%d", env.ID, target))
+			fmt.Sprintf("%s:%d", env.ID, revision))
 		return e
 	})
 	if errors.Is(err, store.ErrNotFound) {

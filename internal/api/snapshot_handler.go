@@ -43,5 +43,5 @@ func (d Deps) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, delivery.BuildSnapshot(cv, cs.Definition))
+	writeJSON(w, http.StatusOK, delivery.BuildSnapshot(cv, cs.Definition, env.DeliveryRevision))
 }

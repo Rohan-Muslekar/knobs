@@ -95,7 +95,8 @@ func (d Deps) handlePutValues(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			return e
 		}
-		if e := d.Repo.SetCurrentVersion(r.Context(), tx, env.ID, newVersion.ID); e != nil {
+		revision, e := d.Repo.SetCurrentVersion(r.Context(), tx, env.ID, newVersion.ID)
+		if e != nil {
 			return e
 		}
 		if e := d.Repo.RecordAudit(r.Context(), tx, env.ProjectID, uid, "values.update", env.ID.String(),
@@ -105,9 +106,12 @@ func (d Deps) handlePutValues(w http.ResponseWriter, r *http.Request) {
 		// Delivered on COMMIT (Postgres defers NOTIFY delivery until the
 		// transaction commits), so a rolled-back write never fires this —
 		// the Listener only ever sees notifications for versions that are
-		// actually live.
+		// actually live. The second field is the monotonic delivery
+		// revision, not the config version: it's what the Listener/SDK
+		// dedupe and gate `since` on, since (unlike version) it never moves
+		// backwards on rollback.
 		_, e = tx.Exec(r.Context(), "SELECT pg_notify($1, $2)", delivery.NotifyChannel,
-			fmt.Sprintf("%s:%d", env.ID, n))
+			fmt.Sprintf("%s:%d", env.ID, revision))
 		return e
 	})
 	if err != nil {

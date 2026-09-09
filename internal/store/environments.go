@@ -15,6 +15,12 @@ type Environment struct {
 	Name             string
 	CurrentVersionID *uuid.UUID
 	CreatedAt        time.Time
+	// DeliveryRevision is the monotonic per-environment counter used as the
+	// dedup/since axis for delivery (snapshot/stream), separate from the
+	// user-facing config Version: a rollback can move Version backwards, but
+	// DeliveryRevision only ever increases. Only populated by EnvironmentByID
+	// today, since that's the only lookup delivery routes use.
+	DeliveryRevision int64
 }
 
 func (r *Repo) CreateEnvironment(ctx context.Context, db DBTX, projectID uuid.UUID, name string) (Environment, error) {
@@ -48,9 +54,9 @@ func (r *Repo) ListEnvironments(ctx context.Context, db DBTX, projectID uuid.UUI
 func (r *Repo) EnvironmentByID(ctx context.Context, db DBTX, id uuid.UUID) (Environment, error) {
 	var e Environment
 	err := db.QueryRow(ctx,
-		`SELECT id, project_id, name, current_version_id, created_at
+		`SELECT id, project_id, name, current_version_id, created_at, delivery_revision
 		 FROM environment WHERE id = $1`, id,
-	).Scan(&e.ID, &e.ProjectID, &e.Name, &e.CurrentVersionID, &e.CreatedAt)
+	).Scan(&e.ID, &e.ProjectID, &e.Name, &e.CurrentVersionID, &e.CreatedAt, &e.DeliveryRevision)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Environment{}, ErrNotFound
 	}

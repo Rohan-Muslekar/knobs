@@ -72,10 +72,13 @@ func TestBuildSnapshot_MapsVersionValuesAndHash(t *testing.T) {
 		CreatedAt:     time.Now(),
 	}
 
-	snap := BuildSnapshot(cv, def)
+	snap := BuildSnapshot(cv, def, 42)
 
 	if snap.Version != cv.Version {
 		t.Fatalf("Version = %d, want %d", snap.Version, cv.Version)
+	}
+	if snap.Revision != 42 {
+		t.Fatalf("Revision = %d, want 42", snap.Revision)
 	}
 	if snap.SchemaHash != SchemaHash(def) {
 		t.Fatalf("SchemaHash = %s, want %s", snap.SchemaHash, SchemaHash(def))
@@ -89,7 +92,7 @@ func TestBuildSnapshot_NilValuesBecomeEmptyMap(t *testing.T) {
 	def := schema.Definition{}
 	cv := store.ConfigVersion{Version: 1, Values: nil}
 
-	snap := BuildSnapshot(cv, def)
+	snap := BuildSnapshot(cv, def, 0)
 
 	if snap.Values == nil {
 		t.Fatal("Values is nil, want empty map")

@@ -38,22 +38,35 @@ func SchemaHash(def schema.Definition) string {
 }
 
 // Snapshot is what delivery routes hand to machine consumers: the config
-// version, its values, and a hash of the schema they were validated against.
+// version, its values, a hash of the schema they were validated against, and
+// the monotonic delivery revision.
+//
+// Revision is deliberately distinct from Version: Version is the user-facing
+// config version, which a rollback can move backwards (repointing at an
+// older config_version). Revision is the environment's delivery_revision,
+// which only ever increases — every write that changes current_version_id,
+// including a rollback, bumps it. Clients dedupe and gate `since` on
+// Revision, never on Version, precisely so a rollback delivers unambiguously
+// even though its Version went down.
 type Snapshot struct {
 	Version    int            `json:"version"`
+	Revision   int64          `json:"revision"`
 	SchemaHash string         `json:"schemaHash"`
 	Values     map[string]any `json:"values"`
 }
 
 // BuildSnapshot assembles a Snapshot from an environment's current config
-// version and its project's schema definition.
-func BuildSnapshot(current store.ConfigVersion, def schema.Definition) Snapshot {
+// version, its project's schema definition, and the environment's current
+// delivery revision (loaded from environment.delivery_revision by the
+// caller).
+func BuildSnapshot(current store.ConfigVersion, def schema.Definition, revision int64) Snapshot {
 	values := current.Values
 	if values == nil {
 		values = map[string]any{}
 	}
 	return Snapshot{
 		Version:    current.Version,
+		Revision:   revision,
 		SchemaHash: SchemaHash(def),
 		Values:     values,
 	}

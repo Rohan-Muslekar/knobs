@@ -46,8 +46,12 @@ func TestVersionsLifecycle(t *testing.T) {
 	if v1.CreatedBy != nil {
 		t.Fatalf("v1.CreatedBy = %v, want nil (createdBy passed as uuid.Nil)", v1.CreatedBy)
 	}
-	if err := repo.SetCurrentVersion(ctx, repo.Pool(), env.ID, v1.ID); err != nil {
+	rev1, err := repo.SetCurrentVersion(ctx, repo.Pool(), env.ID, v1.ID)
+	if err != nil {
 		t.Fatalf("set current v1: %v", err)
+	}
+	if rev1 != 1 {
+		t.Fatalf("revision after first SetCurrentVersion = %d, want 1", rev1)
 	}
 
 	cur, err := repo.CurrentVersion(ctx, repo.Pool(), env.ID)
@@ -73,8 +77,12 @@ func TestVersionsLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insert v2: %v", err)
 	}
-	if err := repo.SetCurrentVersion(ctx, repo.Pool(), env.ID, v2.ID); err != nil {
+	rev2, err := repo.SetCurrentVersion(ctx, repo.Pool(), env.ID, v2.ID)
+	if err != nil {
 		t.Fatalf("set current v2: %v", err)
+	}
+	if rev2 <= rev1 {
+		t.Fatalf("revision after second SetCurrentVersion = %d, want > %d", rev2, rev1)
 	}
 
 	// History is immutable: version 1 must still return its original values
@@ -119,10 +127,28 @@ func TestVersionsLifecycle(t *testing.T) {
 	}
 
 	// A rollback (repository-level: just SetCurrentVersion) flips IsCurrent
-	// back to v1 without touching either version's stored history.
-	if err := repo.SetCurrentVersion(ctx, repo.Pool(), env.ID, v1.ID); err != nil {
+	// back to v1 without touching either version's stored history. This is
+	// the core regression case for the monotonic delivery revision: the
+	// user-facing version goes backwards (2 -> 1), but delivery_revision
+	// must keep climbing — SetCurrentVersion bumps it unconditionally on
+	// every call, rollback included, precisely so a rollback is never
+	// ambiguous on the revision axis.
+	revRollback, err := repo.SetCurrentVersion(ctx, repo.Pool(), env.ID, v1.ID)
+	if err != nil {
 		t.Fatalf("set current v1 (rollback): %v", err)
 	}
+	if revRollback <= rev2 {
+		t.Fatalf("revision after rollback = %d, want > %d (revision must keep increasing even though version went 2 -> 1)", revRollback, rev2)
+	}
+
+	envAfterRollback, err := repo.EnvironmentByID(ctx, repo.Pool(), env.ID)
+	if err != nil {
+		t.Fatalf("environment by id after rollback: %v", err)
+	}
+	if envAfterRollback.DeliveryRevision != revRollback {
+		t.Fatalf("environment.DeliveryRevision = %d, want %d (matching SetCurrentVersion's returned revision)", envAfterRollback.DeliveryRevision, revRollback)
+	}
+
 	versionsAfterRollback, err := repo.ListVersions(ctx, repo.Pool(), env.ID)
 	if err != nil {
 		t.Fatalf("list versions after rollback: %v", err)

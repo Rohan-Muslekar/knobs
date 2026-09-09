@@ -125,18 +125,21 @@ func (l *Listener) listenOnce(ctx context.Context) error {
 	}
 }
 
-// parsePayload parses a NOTIFY payload of the form "<envID>:<version>" and
-// returns the environment id. The version half is intentionally not
-// returned: the loader always fetches the current version fresh rather than
-// trusting the payload's, so a burst of rapid writes can never leave a
-// subscriber stuck on a stale version parsed from an out-of-order or
-// coalesced notification.
+// parsePayload parses a NOTIFY payload of the form "<envID>:<revision>" and
+// returns the environment id. revision is the monotonic delivery_revision at
+// the time of the write, not the user-facing config version — but it is
+// intentionally not returned either: the loader always fetches the current
+// state fresh rather than trusting the payload's, so a burst of rapid writes
+// can never leave a subscriber stuck on a stale revision parsed from an
+// out-of-order or coalesced notification. It is still parsed (and validated
+// as an integer) here rather than ignored outright, so a malformed payload
+// is caught and logged instead of silently accepted.
 func parsePayload(payload string) (uuid.UUID, bool) {
-	idPart, versionPart, found := strings.Cut(payload, ":")
+	idPart, revisionPart, found := strings.Cut(payload, ":")
 	if !found {
 		return uuid.Nil, false
 	}
-	if _, err := strconv.Atoi(versionPart); err != nil {
+	if _, err := strconv.ParseInt(revisionPart, 10, 64); err != nil {
 		return uuid.Nil, false
 	}
 	id, err := uuid.Parse(idPart)

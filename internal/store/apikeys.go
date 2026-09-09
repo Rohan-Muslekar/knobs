@@ -81,7 +81,15 @@ func (r *Repo) RevokeApiKey(ctx context.Context, db DBTX, id, envID uuid.UUID) e
 	return nil
 }
 
+// TouchApiKey updates last_used_at, but only when it's unset or more than 60
+// seconds old. apiKeyGuard calls this on every delivery request, so without
+// the guard this would be a write on the hot path for every single request;
+// throttling it keeps last_used_at fresh enough for operators to tell a live
+// key from a dead one without turning every read into a write.
 func (r *Repo) TouchApiKey(ctx context.Context, db DBTX, id uuid.UUID) error {
-	_, err := db.Exec(ctx, `UPDATE api_key SET last_used_at = now() WHERE id = $1`, id)
+	_, err := db.Exec(ctx,
+		`UPDATE api_key SET last_used_at = now()
+		 WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '60 seconds')`,
+		id)
 	return err
 }

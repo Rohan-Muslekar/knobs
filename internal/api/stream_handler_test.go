@@ -57,7 +57,7 @@ func streamTestApp(t *testing.T) (router http.Handler, cookie string, repo *stor
 		if err != nil {
 			return delivery.Snapshot{}, false
 		}
-		return delivery.BuildSnapshot(cv, cs.Definition), true
+		return delivery.BuildSnapshot(cv, cs.Definition, env.DeliveryRevision), true
 	}
 	// The Listener owns its own dedicated, non-pooled connection (opened
 	// from url, not pool) — same as app.Run wires it in production — so
@@ -255,9 +255,14 @@ func assertNoFrame(t *testing.T, frames <-chan map[string]any, window time.Durat
 // TestStreamFanOut is the end-to-end proof that a PUT values write reaches
 // an open SSE stream via pg_notify -> Listener (dedicated LISTEN
 // connection) -> Hub -> handleStream, and that `since` correctly gates the
-// immediate on-connect snapshot. All waits below are bounded (waitFrame /
-// assertNoFrame timeouts), so a broken fan-out fails fast rather than
-// hanging the suite.
+// immediate on-connect snapshot against the monotonic delivery revision
+// (not the config version — see stream_handler.go's doc comment). In this
+// fixture every write is a plain value save with no rollback, so version
+// and revision happen to climb in lockstep (1, 2, 3, ...); that coincidence
+// is exactly why TestSnapshotRevisionMonotonicAcrossRollback exists
+// separately, to prove the two axes diverge under rollback. All waits below
+// are bounded (waitFrame / assertNoFrame timeouts), so a broken fan-out
+// fails fast rather than hanging the suite.
 func TestStreamFanOut(t *testing.T) {
 	router, cookie, _, _ := streamTestApp(t)
 	envID, key := seedStreamFixture(t, router, cookie)
@@ -311,6 +316,9 @@ func TestStreamFanOut(t *testing.T) {
 	if v, _ := initial["version"].(float64); v != 1 {
 		t.Fatalf("initial frame version = %v, want 1", initial["version"])
 	}
+	if rev, _ := initial["revision"].(float64); rev != 1 {
+		t.Fatalf("initial frame revision = %v, want 1", initial["revision"])
+	}
 	initialValues, _ := initial["values"].(map[string]any)
 	if mr, _ := initialValues["maxRetries"].(float64); mr != 3 {
 		t.Fatalf("initial frame maxRetries = %v, want 3", initialValues["maxRetries"])
@@ -324,13 +332,16 @@ func TestStreamFanOut(t *testing.T) {
 	}
 
 	updated := waitForVersion(t, frames, 10*time.Second, 2)
+	if rev, _ := updated["revision"].(float64); rev != 2 {
+		t.Fatalf("updated frame revision = %v, want 2", updated["revision"])
+	}
 	updatedValues, _ := updated["values"].(map[string]any)
 	if mr, _ := updatedValues["maxRetries"].(float64); mr != 7 {
 		t.Fatalf("updated frame maxRetries = %v, want 7 (fan-out did not deliver the new value)", updatedValues["maxRetries"])
 	}
 	resp.Body.Close()
 
-	// Second connection: since=<current version, 2> must NOT get an
+	// Second connection: since=<current revision, 2> must NOT get an
 	// immediate snapshot (nothing is newer yet), but a subsequent write
 	// still reaches it.
 	req2, _ := http.NewRequestWithContext(streamCtx, http.MethodGet, ts.URL+"/v1/stream?since=2", nil)

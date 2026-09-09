@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -144,17 +145,20 @@ func snapshotLoader(repo *store.Repo) delivery.SnapshotLoader {
 	return func(ctx context.Context, envID uuid.UUID) (delivery.Snapshot, bool) {
 		env, err := repo.EnvironmentByID(ctx, repo.Pool(), envID)
 		if err != nil {
+			log.Printf("delivery: snapshotLoader %s: could not load environment, dropping notification: %v", envID, err)
 			return delivery.Snapshot{}, false
 		}
 		cv, err := repo.CurrentVersion(ctx, repo.Pool(), envID)
 		if err != nil {
+			log.Printf("delivery: snapshotLoader %s: could not load current version, dropping notification: %v", envID, err)
 			return delivery.Snapshot{}, false
 		}
 		cs, err := repo.GetOrInitSchema(ctx, repo.Pool(), env.ProjectID)
 		if err != nil {
+			log.Printf("delivery: snapshotLoader %s: could not load schema, dropping notification: %v", envID, err)
 			return delivery.Snapshot{}, false
 		}
-		return delivery.BuildSnapshot(cv, cs.Definition), true
+		return delivery.BuildSnapshot(cv, cs.Definition, env.DeliveryRevision), true
 	}
 }
 
