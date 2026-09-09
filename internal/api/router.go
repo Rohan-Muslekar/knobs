@@ -55,6 +55,9 @@ func NewRouter(deps Deps) chi.Router {
 			// single-tenant P1, but they'll need project-scoped authorization
 			// once P1b introduces per-user/per-project scoping.
 			r.Get("/environments/{envID}", deps.handleGetEnvironment)
+			r.Post("/environments/{envID}/api-keys", deps.handleCreateApiKey)
+			r.Get("/environments/{envID}/api-keys", deps.handleListApiKeys)
+			r.Delete("/environments/{envID}/api-keys/{keyID}", deps.handleRevokeApiKey)
 			r.Get("/projects/{projectID}/schema", deps.handleGetSchema)
 			r.Put("/projects/{projectID}/schema", deps.handlePutSchema)
 			r.Get("/environments/{envID}/values", deps.handleGetValues)
