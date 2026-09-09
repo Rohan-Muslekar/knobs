@@ -50,6 +50,10 @@ func NewRouter(deps Deps) chi.Router {
 			r.Patch("/projects/{projectID}", deps.handlePatchProject)
 			r.Post("/projects/{projectID}/environments", deps.handleCreateEnvironment)
 			r.Get("/projects/{projectID}/environments", deps.handleListEnvironments)
+			// The /environments/{envID}... routes below are addressable by
+			// bare env id with no project-scope/ownership check — fine under
+			// single-tenant P1, but they'll need project-scoped authorization
+			// once P1b introduces per-user/per-project scoping.
 			r.Get("/environments/{envID}", deps.handleGetEnvironment)
 			r.Get("/projects/{projectID}/schema", deps.handleGetSchema)
 			r.Put("/projects/{projectID}/schema", deps.handlePutSchema)

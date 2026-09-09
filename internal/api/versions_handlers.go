@@ -49,7 +49,11 @@ func (d Deps) handleRollback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req rollbackRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Version == nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if req.Version == nil {
 		writeErr(w, http.StatusUnprocessableEntity, "version required")
 		return
 	}

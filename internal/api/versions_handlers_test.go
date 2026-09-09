@@ -119,12 +119,13 @@ func TestVersionsAPI(t *testing.T) {
 		t.Fatalf("rollback to missing version = %d, want 404, body=%s", badRec.Code, badRec.Body.String())
 	}
 
-	// Rollback with a missing/unparseable body is a 422.
+	// Rollback with a well-formed but missing version field is a 422.
 	if rec := post(router, "/v1/environments/"+envID+"/rollback", `{}`, cookie); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("rollback missing version field = %d, want 422, body=%s", rec.Code, rec.Body.String())
 	}
-	if rec := post(router, "/v1/environments/"+envID+"/rollback", `not json`, cookie); rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("rollback unparseable body = %d, want 422, body=%s", rec.Code, rec.Body.String())
+	// Rollback with an unparseable body is a 400.
+	if rec := post(router, "/v1/environments/"+envID+"/rollback", `not json`, cookie); rec.Code != http.StatusBadRequest {
+		t.Fatalf("rollback unparseable body = %d, want 400, body=%s", rec.Code, rec.Body.String())
 	}
 
 	// Unauthenticated access is rejected.

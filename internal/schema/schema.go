@@ -17,9 +17,14 @@ var allowedTypes = map[string]bool{
 const durationPattern = `^[0-9]+(ns|us|µs|ms|s|m|h)$`
 
 type Field struct {
-	Name        string   `json:"name"`
-	Type        string   `json:"type"`
-	Required    bool     `json:"required"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Required bool   `json:"required"`
+	// Default is parsed and persisted alongside the field but is not
+	// emitted into the compiled JSON Schema and is not applied to values
+	// in P1 — server-side validation neither enforces nor injects it. It
+	// is carried through for P3, where SDK/codegen will emit and apply
+	// defaults client-side.
 	Default     any      `json:"default,omitempty"`
 	Min         *float64 `json:"min,omitempty"`
 	Max         *float64 `json:"max,omitempty"`

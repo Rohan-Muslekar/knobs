@@ -97,7 +97,11 @@ func (d Deps) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req patchProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	if req.Name == "" {
 		writeErr(w, http.StatusUnprocessableEntity, "name required")
 		return
 	}

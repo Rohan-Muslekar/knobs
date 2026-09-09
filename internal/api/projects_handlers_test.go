@@ -70,6 +70,15 @@ func TestProjectsAPI(t *testing.T) {
 		t.Fatalf("patch name = %q, want %q", name, "Acme Inc")
 	}
 
+	// Patch with an unparseable body is a 400.
+	if rec := patch(router, "/v1/projects/"+id, `not json`, cookie); rec.Code != http.StatusBadRequest {
+		t.Fatalf("patch unparseable body = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	// Patch with a well-formed but missing name field is a 422.
+	if rec := patch(router, "/v1/projects/"+id, `{}`, cookie); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("patch missing name field = %d, want 422, body=%s", rec.Code, rec.Body.String())
+	}
+
 	if rec := get(router, "/v1/projects/"+uuid.New().String(), cookie); rec.Code != http.StatusNotFound {
 		t.Fatalf("get missing = %d, want 404", rec.Code)
 	}
