@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-
-export type Project = { id: string; name: string; slug: string; createdAt: string };
+import type { Project } from "@/hooks/useProjects";
 
 export type Environment = {
   id: string;

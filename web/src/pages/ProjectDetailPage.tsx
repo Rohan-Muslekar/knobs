@@ -15,7 +15,8 @@ export function ProjectDetailPage() {
 
   const isPending = project.isPending || environments.isPending;
   const isNotFound = project.isError && project.error instanceof ApiError && project.error.status === 404;
-  const isError = (project.isError && !isNotFound) || environments.isError;
+  const isProjectError = project.isError && !isNotFound;
+  const isError = isProjectError || environments.isError;
 
   if (isPending) {
     return <div className="text-sm text-muted-foreground">Loading…</div>;
@@ -28,7 +29,7 @@ export function ProjectDetailPage() {
   if (isError || !project.data) {
     return (
       <div role="alert" className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
-        Failed to load project.
+        {isProjectError || !project.data ? "Failed to load project." : "Failed to load environments."}
       </div>
     );
   }

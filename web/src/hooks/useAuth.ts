@@ -27,7 +27,6 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => api("/v1/auth/logout", { method: "POST" }),
     onSuccess: () => {
-      qc.setQueryData(["session"], null);
       qc.clear();
     },
   });
