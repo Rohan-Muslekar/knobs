@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Rohan-Muslekar/knobs/internal/schema"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
@@ -99,6 +100,15 @@ func (d Deps) handlePutValues(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"version": n})
 	})
 	if err != nil {
+		// Two concurrent writes can both read the same NextVersionNumber and
+		// then race to insert it; UNIQUE(environment_id, version) rejects the
+		// loser with a 23505, which we surface as a 409 so the client knows
+		// to retry rather than treating it as a server fault.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			writeErr(w, http.StatusConflict, "version conflict, retry")
+			return
+		}
 		writeErr(w, http.StatusInternalServerError, "could not update values")
 		return
 	}
