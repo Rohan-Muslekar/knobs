@@ -1,8 +1,16 @@
 # Go example
 
-Knobs has **no official Go SDK in v1** (v1 is TS/JS-only). But the delivery API
-is plain HTTP + a Bearer read key, so a Go consumer talks to it directly. This
-is a minimal, **stdlib-only** reference client.
+> **Superseded for production use.** Knobs now ships a real Go SDK at
+> [`sdk/go`](../../sdk/go) — `go get github.com/Rohan-Muslekar/knobs/sdk/go`, then
+> `New`/`Ready`/`Get`/`GetAll`/`OnChange`/`Close`, plus `knobs gen --lang go` for a
+> typed `Config`. Use that instead of hand-rolling a client. This example is kept
+> as a "how it works under the hood" illustration of the delivery API's wire
+> contract (snapshot + SSE, revision-gated, Bearer-authed) — the same contract
+> `sdk/go` implements, minus the poll fallback and richer reconnect backoff.
+
+The delivery API is plain HTTP + a Bearer read key, so a Go consumer can talk to
+it directly without any SDK. This is a minimal, **stdlib-only** reference client
+that does exactly that.
 
 - `knobs/client.go` — the client: `Snapshot(ctx)` (fetch current) + `Stream(ctx, since, cb)`
   (SSE live updates, revision-gated), plus typed getters (`Int`/`Bool`/`String`).
@@ -30,6 +38,6 @@ go build ./...
 - Dedup on `Revision` (monotonic), never `Version` — a rollback carries a higher
   `Revision` but a lower `Version`, and must still apply.
 - JSON numbers decode into `float64`; the `Int` helper converts.
-- This reference does snapshot + SSE + reconnect. A production Go client would
-  add a slow-poll fallback and richer backoff (mirroring the TS SDK). When a
-  first-class Go SDK lands (P4+), prefer that over hand-rolling.
+- This reference does snapshot + SSE + reconnect, but skips the slow-poll
+  fallback and richer backoff that `sdk/go` adds — use `sdk/go` for anything
+  beyond learning how the wire contract works.
