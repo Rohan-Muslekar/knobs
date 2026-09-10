@@ -95,6 +95,12 @@ func NewRouter(deps Deps) chi.Router {
 		r.Group(func(r chi.Router) {
 			r.Use(requireUser(deps))
 			r.Get("/auth/me", deps.handleMe)
+			r.Post("/organizations", deps.handleCreateOrganization)
+			r.Get("/organizations", deps.handleListOrganizations)
+			r.Get("/organizations/{orgID}/members", deps.handleListMembers)
+			r.Post("/organizations/{orgID}/members", deps.handleAddMember)
+			r.Patch("/organizations/{orgID}/members/{userID}", deps.handleUpdateMemberRole)
+			r.Delete("/organizations/{orgID}/members/{userID}", deps.handleRemoveMember)
 			r.Post("/projects", deps.handleCreateProject)
 			r.Get("/projects", deps.handleListProjects)
 			r.Get("/projects/{projectID}", deps.handleGetProject)
@@ -102,9 +108,10 @@ func NewRouter(deps Deps) chi.Router {
 			r.Post("/projects/{projectID}/environments", deps.handleCreateEnvironment)
 			r.Get("/projects/{projectID}/environments", deps.handleListEnvironments)
 			// The /environments/{envID}... routes below are addressable by
-			// bare env id with no project-scope/ownership check — fine under
-			// single-tenant P1, but they'll need project-scoped authorization
-			// once P1b introduces per-user/per-project scoping.
+			// bare env id, but each handler resolves the environment's
+			// organization and calls authorizeEnv/authorizeOrg against it
+			// (see authorize.go), so a non-member gets 404 and an
+			// under-privileged member gets 403 — see authz_matrix_test.go.
 			r.Get("/environments/{envID}", deps.handleGetEnvironment)
 			r.Post("/environments/{envID}/api-keys", deps.handleCreateApiKey)
 			r.Get("/environments/{envID}/api-keys", deps.handleListApiKeys)
