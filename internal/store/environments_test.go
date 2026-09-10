@@ -12,8 +12,9 @@ import (
 func TestEnvironmentCRUD(t *testing.T) {
 	ctx := context.Background()
 	repo := store.New(migratedPool(t))
+	org := defaultOrgID(t, ctx, repo)
 
-	p, err := repo.CreateProject(ctx, repo.Pool(), "Acme", "acme")
+	p, err := repo.CreateProject(ctx, repo.Pool(), org, "Acme", "acme")
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}

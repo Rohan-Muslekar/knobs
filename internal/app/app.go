@@ -163,8 +163,9 @@ func snapshotLoader(repo *store.Repo) delivery.SnapshotLoader {
 }
 
 // seedAdmin creates the first admin user from ADMIN_EMAIL/ADMIN_PASSWORD when
-// the users table is empty. It is a no-op once any user exists or when those
-// environment variables are unset.
+// the users table is empty, and makes them an owner of the "default"
+// organization the rbac migration creates. It is a no-op once any user
+// exists or when those environment variables are unset.
 func seedAdmin(ctx context.Context, repo *store.Repo, authr *auth.Authenticator, cfg config.Config) error {
 	if cfg.AdminEmail == "" || cfg.AdminPassword == "" {
 		return nil
@@ -180,6 +181,13 @@ func seedAdmin(ctx context.Context, repo *store.Repo, authr *auth.Authenticator,
 	if err != nil {
 		return err
 	}
-	_, err = repo.CreateUser(ctx, repo.Pool(), cfg.AdminEmail, hash)
-	return err
+	admin, err := repo.CreateUser(ctx, repo.Pool(), cfg.AdminEmail, hash)
+	if err != nil {
+		return err
+	}
+	defaultOrg, err := repo.OrganizationBySlug(ctx, repo.Pool(), "default")
+	if err != nil {
+		return fmt.Errorf("seed admin: lookup default org: %w", err)
+	}
+	return repo.AddMember(ctx, repo.Pool(), defaultOrg.ID, admin.ID, "owner")
 }

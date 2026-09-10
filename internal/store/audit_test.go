@@ -14,8 +14,9 @@ import (
 func TestListAudit(t *testing.T) {
 	ctx := context.Background()
 	repo := store.New(migratedPool(t))
+	org := defaultOrgID(t, ctx, repo)
 
-	p, err := repo.CreateProject(ctx, repo.Pool(), "Acme", "acme")
+	p, err := repo.CreateProject(ctx, repo.Pool(), org, "Acme", "acme")
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}
@@ -68,7 +69,7 @@ func TestListAudit(t *testing.T) {
 	}
 
 	// A different project's audit entries are not returned.
-	other, err := repo.CreateProject(ctx, repo.Pool(), "Other", "other")
+	other, err := repo.CreateProject(ctx, repo.Pool(), org, "Other", "other")
 	if err != nil {
 		t.Fatalf("create other project: %v", err)
 	}
@@ -84,9 +85,10 @@ func TestListAudit(t *testing.T) {
 func TestAuditSurvivesProjectDelete(t *testing.T) {
 	ctx := context.Background()
 	repo := store.New(migratedPool(t))
+	org := defaultOrgID(t, ctx, repo)
 
 	// Create a project and record audit entries.
-	p, err := repo.CreateProject(ctx, repo.Pool(), "Acme", "acme")
+	p, err := repo.CreateProject(ctx, repo.Pool(), org, "Acme", "acme")
 	if err != nil {
 		t.Fatalf("create project: %v", err)
 	}

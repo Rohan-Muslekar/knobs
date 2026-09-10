@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/testcontainers/testcontainers-go"
@@ -51,4 +52,16 @@ func migratedPool(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
+}
+
+// defaultOrgID returns the id of the "default" organization that the rbac
+// migration creates, for tests that only need a valid org to hang a project
+// off of and don't care which one.
+func defaultOrgID(t *testing.T, ctx context.Context, repo *store.Repo) uuid.UUID {
+	t.Helper()
+	org, err := repo.OrganizationBySlug(ctx, repo.Pool(), "default")
+	if err != nil {
+		t.Fatalf("default org: %v", err)
+	}
+	return org.ID
 }

@@ -33,10 +33,18 @@ func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	// requireUser has already run on this route, so the id is always present;
 	// the ok is discarded rather than checked again.
 	uid, _ := currentUserID(r.Context())
+	// TODO(task 3): resolve the caller's organization from a route/context
+	// value once org-scoped routing lands; every project is created under
+	// the "default" org until then.
+	org, err := d.Repo.OrganizationBySlug(r.Context(), d.Repo.Pool(), "default")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not resolve organization")
+		return
+	}
 	var p store.Project
-	err := d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
+	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
 		var e error
-		p, e = d.Repo.CreateProject(r.Context(), tx, req.Name, req.Slug)
+		p, e = d.Repo.CreateProject(r.Context(), tx, org.ID, req.Name, req.Slug)
 		if e != nil {
 			return e
 		}
