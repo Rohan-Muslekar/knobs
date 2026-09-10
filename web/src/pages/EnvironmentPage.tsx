@@ -10,6 +10,7 @@ import { useEnvironment, useSaveValues, useValues } from "@/hooks/useValues";
 import { useSchema } from "@/hooks/useSchema";
 import type { SchemaField } from "@/hooks/useSchema";
 import type { Rule } from "@/types/targeting";
+import { useCan } from "@/context/OrgContext";
 import { ApiError } from "@/lib/api";
 
 function initFormValues(fields: SchemaField[], current: Record<string, unknown> | undefined): Record<string, unknown> {
@@ -113,6 +114,8 @@ function EnvironmentEditorForm({
   const schema = useSchema(projectId);
   const values = useValues(environmentId);
   const saveValues = useSaveValues(environmentId);
+  const can = useCan();
+  const canSave = can("editor");
 
   // `edits` holds only what the user has changed in this session; anything
   // not yet touched falls back to the server-derived initial value below.
@@ -310,11 +313,13 @@ function EnvironmentEditorForm({
         </div>
       )}
 
-      <div>
-        <Button onClick={onSave} disabled={saveValues.isPending}>
-          {saveValues.isPending ? "Saving…" : "Save"}
-        </Button>
-      </div>
+      {canSave && (
+        <div>
+          <Button onClick={onSave} disabled={saveValues.isPending}>
+            {saveValues.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      )}
 
       <VersionHistory envId={environmentId} />
     </div>

@@ -6,6 +6,7 @@ import { Table, TableBody, TableHead, TableHeader, TableRow } from "@/components
 import { SchemaFieldRow } from "@/components/SchemaFieldRow";
 import { useSchema, useUpdateSchema } from "@/hooks/useSchema";
 import type { SchemaField } from "@/hooks/useSchema";
+import { useCan } from "@/context/OrgContext";
 import { ApiError } from "@/lib/api";
 
 // A field carries a client-only `_uid` so list rows can be keyed on stable
@@ -84,6 +85,8 @@ function SchemaEditor({
   schemaVersion: number;
 }) {
   const updateSchema = useUpdateSchema(projectId);
+  const can = useCan();
+  const canSave = can("admin");
   const [fields, setFields] = useState<EditableField[]>(() => initialFields.map(withUid));
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -164,9 +167,11 @@ function SchemaEditor({
         <Button variant="outline" onClick={addField}>
           Add field
         </Button>
-        <Button onClick={onSave} disabled={updateSchema.isPending}>
-          {updateSchema.isPending ? "Saving…" : "Save schema"}
-        </Button>
+        {canSave && (
+          <Button onClick={onSave} disabled={updateSchema.isPending}>
+            {updateSchema.isPending ? "Saving…" : "Save schema"}
+          </Button>
+        )}
       </div>
     </div>
   );
