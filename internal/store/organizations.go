@@ -199,7 +199,8 @@ func (r *Repo) OrgIDForEnv(ctx context.Context, db DBTX, envID uuid.UUID) (uuid.
 }
 
 // CountOwners counts how many members of an organization hold the "owner"
-// role — used by the last-owner guard when removing/demoting a member.
+// role. Plain read, no locking — safe for callers that just want to display
+// a count, but NOT for the last-owner guard: see CountOwnersForUpdate.
 func (r *Repo) CountOwners(ctx context.Context, db DBTX, orgID uuid.UUID) (int, error) {
 	var n int
 	err := db.QueryRow(ctx,
@@ -207,4 +208,33 @@ func (r *Repo) CountOwners(ctx context.Context, db DBTX, orgID uuid.UUID) (int, 
 		orgID,
 	).Scan(&n)
 	return n, err
+}
+
+// CountOwnersForUpdate locks the org's owner membership rows (FOR UPDATE) and
+// returns how many there are, so a concurrent owner demote/remove on the same
+// org serializes behind this lock instead of racing the last-owner guard.
+//
+// Postgres can't put FOR UPDATE on an aggregate, so this selects the actual
+// owner rows and counts them in Go. A second transaction calling this on the
+// same org blocks until the first commits (or rolls back), then re-reads the
+// post-commit owner set under READ COMMITTED — which is what closes the
+// TOCTOU window in handleUpdateMemberRole/handleRemoveMember.
+func (r *Repo) CountOwnersForUpdate(ctx context.Context, db DBTX, orgID uuid.UUID) (int, error) {
+	rows, err := db.Query(ctx,
+		`SELECT user_id FROM organization_member WHERE organization_id = $1 AND role = 'owner' FOR UPDATE`,
+		orgID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var uid uuid.UUID
+		if err := rows.Scan(&uid); err != nil {
+			return 0, err
+		}
+		n++
+	}
+	return n, rows.Err()
 }

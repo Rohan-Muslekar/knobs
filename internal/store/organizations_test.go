@@ -4,9 +4,12 @@ package store_test
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 )
@@ -187,6 +190,93 @@ func TestCountOwners(t *testing.T) {
 
 	if n, err := repo.CountOwners(ctx, repo.Pool(), org.ID); err != nil || n != 1 {
 		t.Fatalf("count owners = %d, err=%v, want 1", n, err)
+	}
+}
+
+// errLastOwnerForTest mirrors internal/api's errLastOwner sentinel — this
+// test lives in the store package and reimplements the same guard shape
+// (lock owner rows, count, refuse to drop below one) that the handlers use,
+// so it needs its own sentinel rather than importing internal/api.
+var errLastOwnerForTest = errors.New("cannot demote or remove the last owner")
+
+// TestCountOwnersForUpdateSerializesLastOwnerGuard proves the fix for the
+// TOCTOU race in the last-owner guard: with an org that has two owners, two
+// concurrent transactions each try to demote one owner to viewer, replicating
+// exactly what handleUpdateMemberRole does (CountOwnersForUpdate, then only
+// demote if the locked count is still >1).
+//
+// Before the fix (plain CountOwners, no row lock) both transactions could
+// read count==2 under READ COMMITTED and both proceed, leaving the org with
+// zero owners. With CountOwnersForUpdate locking the owner rows, the second
+// transaction blocks until the first commits, then re-reads the true
+// post-commit count (1) and refuses. Run with -race and a high -count to
+// make sure this holds up under repetition, not just once by luck.
+func TestCountOwnersForUpdateSerializesLastOwnerGuard(t *testing.T) {
+	ctx := context.Background()
+	repo := store.New(migratedPool(t))
+
+	org, err := repo.CreateOrganization(ctx, repo.Pool(), "Acme Corp", "acme-corp")
+	if err != nil {
+		t.Fatalf("create org: %v", err)
+	}
+	ownerA, err := repo.CreateUser(ctx, repo.Pool(), "ownera@acme.test", "hash")
+	if err != nil {
+		t.Fatalf("create ownerA: %v", err)
+	}
+	ownerB, err := repo.CreateUser(ctx, repo.Pool(), "ownerb@acme.test", "hash")
+	if err != nil {
+		t.Fatalf("create ownerB: %v", err)
+	}
+	if err := repo.AddMember(ctx, repo.Pool(), org.ID, ownerA.ID, "owner"); err != nil {
+		t.Fatalf("add ownerA: %v", err)
+	}
+	if err := repo.AddMember(ctx, repo.Pool(), org.ID, ownerB.ID, "owner"); err != nil {
+		t.Fatalf("add ownerB: %v", err)
+	}
+
+	// demote replays the handler's guard: lock the owner rows, count them,
+	// and only demote the target if that locked count is still above 1.
+	demote := func(target uuid.UUID) error {
+		return repo.WithTx(ctx, func(tx pgx.Tx) error {
+			n, err := repo.CountOwnersForUpdate(ctx, tx, org.ID)
+			if err != nil {
+				return err
+			}
+			if n <= 1 {
+				return errLastOwnerForTest
+			}
+			return repo.UpdateMemberRole(ctx, tx, org.ID, target, "viewer")
+		})
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	go func() { defer wg.Done(); errs[0] = demote(ownerA.ID) }()
+	go func() { defer wg.Done(); errs[1] = demote(ownerB.ID) }()
+	wg.Wait()
+
+	succeeded := 0
+	for i, e := range errs {
+		switch {
+		case e == nil:
+			succeeded++
+		case errors.Is(e, errLastOwnerForTest):
+			// expected outcome for the loser of the row lock
+		default:
+			t.Fatalf("demote %d: unexpected error: %v", i, e)
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("expected exactly one demote to succeed and one to be rejected, got %d successes", succeeded)
+	}
+
+	n, err := repo.CountOwners(ctx, repo.Pool(), org.ID)
+	if err != nil {
+		t.Fatalf("count owners after concurrent demotes: %v", err)
+	}
+	if n < 1 {
+		t.Fatalf("owner count after concurrent demotes = %d, want >= 1 (invariant violated)", n)
 	}
 }
 

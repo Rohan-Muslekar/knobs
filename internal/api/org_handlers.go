@@ -293,7 +293,10 @@ func (d Deps) handleUpdateMemberRole(w http.ResponseWriter, r *http.Request) {
 			return e
 		}
 		if currentRole == string(authz.RoleOwner) && req.Role != string(authz.RoleOwner) {
-			n, cntErr := d.Repo.CountOwners(r.Context(), tx, orgID)
+			// Lock the owner rows before counting: two concurrent
+			// demotes on the same org would otherwise both read the
+			// pre-demote count under READ COMMITTED and both pass.
+			n, cntErr := d.Repo.CountOwnersForUpdate(r.Context(), tx, orgID)
 			if cntErr != nil {
 				return cntErr
 			}
@@ -344,7 +347,10 @@ func (d Deps) handleRemoveMember(w http.ResponseWriter, r *http.Request) {
 			return e
 		}
 		if currentRole == string(authz.RoleOwner) {
-			n, cntErr := d.Repo.CountOwners(r.Context(), tx, orgID)
+			// Lock the owner rows before counting: two concurrent
+			// removes on the same org would otherwise both read the
+			// pre-remove count under READ COMMITTED and both pass.
+			n, cntErr := d.Repo.CountOwnersForUpdate(r.Context(), tx, orgID)
 			if cntErr != nil {
 				return cntErr
 			}
