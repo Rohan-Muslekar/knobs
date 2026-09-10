@@ -12,8 +12,9 @@ import (
 func TestProjectCRUD(t *testing.T) {
 	ctx := context.Background()
 	repo := store.New(migratedPool(t))
+	org := defaultOrgID(t, ctx, repo)
 
-	p, err := repo.CreateProject(ctx, repo.Pool(), "Acme", "acme")
+	p, err := repo.CreateProject(ctx, repo.Pool(), org, "Acme", "acme")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -30,7 +31,7 @@ func TestProjectCRUD(t *testing.T) {
 		t.Fatalf("list len=%d err=%v", len(list), err)
 	}
 	// duplicate slug rejected by the unique constraint
-	if _, err := repo.CreateProject(ctx, repo.Pool(), "Other", "acme"); err == nil {
+	if _, err := repo.CreateProject(ctx, repo.Pool(), org, "Other", "acme"); err == nil {
 		t.Fatal("expected duplicate slug rejection")
 	}
 }

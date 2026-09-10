@@ -7,16 +7,20 @@ import { render } from "@testing-library/react";
 import { server, http, HttpResponse } from "@/test/msw";
 import { SchemaBuilderPage } from "@/pages/SchemaBuilderPage";
 import { Toaster } from "@/components/ui/sonner";
+import { OrgProvider } from "@/context/OrgContext";
+import type { Role } from "@/lib/roles";
 
-function renderSchemaBuilder() {
+function renderSchemaBuilder(role: Role = "admin") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter([{ path: "/projects/:projectId/schema", element: <SchemaBuilderPage /> }], {
     initialEntries: ["/projects/p1/schema"],
   });
   return render(
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
-      <Toaster />
+      <OrgProvider organizations={[{ id: "org1", name: "Acme", slug: "acme", role }]}>
+        <RouterProvider router={router} />
+        <Toaster />
+      </OrgProvider>
     </QueryClientProvider>,
   );
 }

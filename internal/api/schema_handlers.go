@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/Rohan-Muslekar/knobs/internal/authz"
 	"github.com/Rohan-Muslekar/knobs/internal/schema"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 )
@@ -18,11 +19,8 @@ func (d Deps) handleGetSchema(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid project id")
 		return
 	}
-	if _, err := d.Repo.ProjectByID(r.Context(), d.Repo.Pool(), projectID); errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "project not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load project")
+	uid, _ := currentUserID(r.Context())
+	if _, _, err := d.authorizeProject(r.Context(), d.Repo.Pool(), uid, projectID, authz.RoleViewer); writeAuthzErr(w, err) {
 		return
 	}
 	cs, err := d.Repo.GetOrInitSchema(r.Context(), d.Repo.Pool(), projectID)
@@ -43,11 +41,10 @@ func (d Deps) handlePutSchema(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid project id")
 		return
 	}
-	if _, err := d.Repo.ProjectByID(r.Context(), d.Repo.Pool(), projectID); errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "project not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load project")
+	// requireUser has already run on this route, so the id is always present;
+	// the ok is discarded rather than checked again.
+	uid, _ := currentUserID(r.Context())
+	if _, _, err := d.authorizeProject(r.Context(), d.Repo.Pool(), uid, projectID, authz.RoleAdmin); writeAuthzErr(w, err) {
 		return
 	}
 
@@ -67,9 +64,6 @@ func (d Deps) handlePutSchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// requireUser has already run on this route, so the id is always present;
-	// the ok is discarded rather than checked again.
-	uid, _ := currentUserID(r.Context())
 	var cs store.ConfigSchema
 	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
 		// GetOrInitSchema then LockProjectSchema, in that order, in this same

@@ -29,9 +29,9 @@ func bearer(h http.Handler, path, token string) *httptest.ResponseRecorder {
 }
 
 func TestSnapshotAPI(t *testing.T) {
-	router, cookie, repo := seededRouter(t)
+	router, cookie, repo, orgID := seededRouter(t)
 
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
 	}
@@ -218,9 +218,9 @@ func TestSnapshotAPI(t *testing.T) {
 // regardless, because SetCurrentVersion bumps delivery_revision
 // unconditionally on every call it makes, rollback included.
 func TestSnapshotRevisionMonotonicAcrossRollback(t *testing.T) {
-	router, cookie, _ := seededRouter(t)
+	router, cookie, _, orgID := seededRouter(t)
 
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
 	}
@@ -304,9 +304,9 @@ func TestSnapshotRevisionMonotonicAcrossRollback(t *testing.T) {
 // time this GET returns — no polling or retry needed for a deterministic
 // assertion.
 func TestSnapshotTouchesLastUsedAt(t *testing.T) {
-	router, cookie, repo := seededRouter(t)
+	router, cookie, repo, orgID := seededRouter(t)
 
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
 	}

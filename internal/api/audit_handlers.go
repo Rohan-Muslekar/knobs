@@ -1,13 +1,13 @@
 package api
 
 import (
-	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/Rohan-Muslekar/knobs/internal/authz"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 )
 
@@ -23,11 +23,8 @@ func (d Deps) handleListAudit(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid project id")
 		return
 	}
-	if _, err := d.Repo.ProjectByID(r.Context(), d.Repo.Pool(), projectID); errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "project not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load project")
+	uid, _ := currentUserID(r.Context())
+	if _, _, err := d.authorizeProject(r.Context(), d.Repo.Pool(), uid, projectID, authz.RoleViewer); writeAuthzErr(w, err) {
 		return
 	}
 

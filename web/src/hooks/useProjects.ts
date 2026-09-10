@@ -10,11 +10,11 @@ export function useProjects() {
   });
 }
 
-export function useCreateProject() {
+export function useCreateProject(organizationId: string) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (project: { name: string; slug: string }) =>
-      api<Project>("/v1/projects", { method: "POST", body: project }),
+      api<Project>("/v1/projects", { method: "POST", body: { ...project, organizationId } }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects"] });
     },

@@ -67,5 +67,16 @@ func (d Deps) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnauthorized, "unknown user")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": u.ID, "email": u.Email})
+	orgs, err := d.Repo.ListOrganizationsForUser(r.Context(), d.Repo.Pool(), uid)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not list organizations")
+		return
+	}
+	orgViews := make([]map[string]any, 0, len(orgs))
+	for _, o := range orgs {
+		orgViews = append(orgViews, map[string]any{
+			"id": o.ID, "name": o.Name, "slug": o.Slug, "role": o.Role,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": u.ID, "email": u.Email, "organizations": orgViews})
 }

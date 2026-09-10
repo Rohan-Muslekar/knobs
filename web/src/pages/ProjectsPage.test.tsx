@@ -6,13 +6,17 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { server, http, HttpResponse } from "@/test/msw";
 import { ProjectsPage } from "@/pages/ProjectsPage";
+import { OrgProvider } from "@/context/OrgContext";
+import type { Role } from "@/lib/roles";
 
-function renderProjects() {
+function renderProjects(role: Role = "admin") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter([{ path: "/", element: <ProjectsPage /> }], { initialEntries: ["/"] });
   return render(
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
+      <OrgProvider organizations={[{ id: "org1", name: "Acme", slug: "acme", role }]}>
+        <RouterProvider router={router} />
+      </OrgProvider>
     </QueryClientProvider>,
   );
 }
@@ -129,5 +133,31 @@ describe("ProjectsPage", () => {
     // Dialog stays open on failure.
     expect(screen.getByLabelText(/^name$/i)).toBeInTheDocument();
     expect(screen.getByText("Acme")).toBeInTheDocument();
+  });
+
+  it("hides New project and Rename for a viewer", async () => {
+    server.use(
+      http.get("/v1/projects", () =>
+        HttpResponse.json([{ id: "p1", name: "Acme", slug: "acme", createdAt: "2026-01-01T00:00:00Z" }]),
+      ),
+    );
+
+    renderProjects("viewer");
+    await waitFor(() => expect(screen.getByText("Acme")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /new project/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /rename/i })).toBeNull();
+  });
+
+  it("shows New project and Rename for an admin", async () => {
+    server.use(
+      http.get("/v1/projects", () =>
+        HttpResponse.json([{ id: "p1", name: "Acme", slug: "acme", createdAt: "2026-01-01T00:00:00Z" }]),
+      ),
+    );
+
+    renderProjects("admin");
+    await waitFor(() => expect(screen.getByText("Acme")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /new project/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /rename/i })).toBeInTheDocument();
   });
 });

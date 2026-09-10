@@ -15,31 +15,49 @@ import (
 )
 
 // seededRouter returns a router, a valid session cookie for a seeded admin,
-// and the repo backing it (so tests can read back state, e.g. audit_log,
-// that the HTTP surface doesn't expose directly).
-func seededRouter(t *testing.T) (http.Handler, string, *store.Repo) {
+// the repo backing it (so tests can read back state, e.g. audit_log, that
+// the HTTP surface doesn't expose directly), and the id of an organization
+// the seeded user is an owner of (every management route is authorized
+// against organization membership, so tests that drive the HTTP surface as
+// this user need an org to act in — most visibly, POST /v1/projects, which
+// requires an organizationId the caller is at least an admin of).
+func seededRouter(t *testing.T) (http.Handler, string, *store.Repo, uuid.UUID) {
 	t.Helper()
 	repo := store.New(migratedPool(t))
 	authr := auth.New("test-secret", false)
 	hash, _ := authr.Hash("pw")
-	if _, err := repo.CreateUser(t.Context(), repo.Pool(), "a@x.com", hash); err != nil {
+	u, err := repo.CreateUser(t.Context(), repo.Pool(), "a@x.com", hash)
+	if err != nil {
 		t.Fatalf("seed: %v", err)
+	}
+	org, err := repo.CreateOrganization(t.Context(), repo.Pool(), "Acme Org", "acme-org")
+	if err != nil {
+		t.Fatalf("seed org: %v", err)
+	}
+	if err := repo.AddMember(t.Context(), repo.Pool(), org.ID, u.ID, "owner"); err != nil {
+		t.Fatalf("seed membership: %v", err)
 	}
 	router := api.NewRouter(api.Deps{Repo: repo, Auth: authr})
 	rec := post(router, "/v1/auth/login", `{"email":"a@x.com","password":"pw"}`, "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("login failed: %d", rec.Code)
 	}
-	return router, rec.Result().Cookies()[0].Value, repo
+	return router, rec.Result().Cookies()[0].Value, repo, org.ID
+}
+
+// createProjectBody builds the JSON body for POST /v1/projects, folding in
+// the organizationId every create now requires.
+func createProjectBody(orgID uuid.UUID, name, slug string) string {
+	return `{"name":"` + name + `","slug":"` + slug + `","organizationId":"` + orgID.String() + `"}`
 }
 
 func TestProjectsAPI(t *testing.T) {
-	router, cookie, repo := seededRouter(t)
+	router, cookie, repo, orgID := seededRouter(t)
 
-	if rec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, ""); rec.Code != http.StatusUnauthorized {
+	if rec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unauth create = %d, want 401", rec.Code)
 	}
-	rec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	rec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create = %d, want 201", rec.Code)
 	}
@@ -50,11 +68,23 @@ func TestProjectsAPI(t *testing.T) {
 		t.Fatal("no id returned")
 	}
 
-	if rec := post(router, "/v1/projects", `{"name":"Dup","slug":"acme"}`, cookie); rec.Code != http.StatusConflict {
+	if rec := post(router, "/v1/projects", createProjectBody(orgID, "Dup", "acme"), cookie); rec.Code != http.StatusConflict {
 		t.Fatalf("dup slug = %d, want 409", rec.Code)
 	}
-	if rec := post(router, "/v1/projects", `{"name":"Bad","slug":"Bad Slug"}`, cookie); rec.Code != http.StatusUnprocessableEntity {
+	if rec := post(router, "/v1/projects", createProjectBody(orgID, "Bad", "Bad Slug"), cookie); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("bad slug = %d, want 422", rec.Code)
+	}
+	// A well-formed body missing organizationId entirely is a 422, not a
+	// 404/403 — the field is required before authorization is even
+	// attempted.
+	if rec := post(router, "/v1/projects", `{"name":"NoOrg","slug":"no-org"}`, cookie); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("missing organizationId = %d, want 422, body=%s", rec.Code, rec.Body.String())
+	}
+	// A well-formed organizationId the caller isn't a member of is a 404
+	// (existence hidden), covered exhaustively for every route in
+	// authz_matrix_test.go; this just spot-checks the create-project path.
+	if rec := post(router, "/v1/projects", createProjectBody(uuid.New(), "Ghost", "ghost"), cookie); rec.Code != http.StatusNotFound {
+		t.Fatalf("create under unknown org = %d, want 404, body=%s", rec.Code, rec.Body.String())
 	}
 	if rec := get(router, "/v1/projects/"+id, cookie); rec.Code != http.StatusOK {
 		t.Fatalf("get = %d, want 200", rec.Code)

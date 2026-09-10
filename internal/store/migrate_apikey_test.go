@@ -51,9 +51,12 @@ func TestApiKeyMigration(t *testing.T) {
 	}
 
 	// Hash uniqueness is enforced.
-	// First, create a project and environment (required for FK constraints).
-	var projectID, envID string
-	if err := db.QueryRowContext(ctx, "INSERT INTO project(name, slug) VALUES ($1, $2) RETURNING id", "test", "test").Scan(&projectID); err != nil {
+	// First, create an org, project and environment (required for FK constraints).
+	var orgID, projectID, envID string
+	if err := db.QueryRowContext(ctx, "SELECT id FROM organization WHERE slug = 'default'").Scan(&orgID); err != nil {
+		t.Fatalf("lookup default org: %v", err)
+	}
+	if err := db.QueryRowContext(ctx, "INSERT INTO project(organization_id, name, slug) VALUES ($1, $2, $3) RETURNING id", orgID, "test", "test").Scan(&projectID); err != nil {
 		t.Fatalf("create project: %v", err)
 	}
 	if err := db.QueryRowContext(ctx, "INSERT INTO environment(project_id, name) VALUES ($1, $2) RETURNING id", projectID, "test").Scan(&envID); err != nil {

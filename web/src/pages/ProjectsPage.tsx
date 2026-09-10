@@ -9,6 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { CreateProjectDialog } from "@/components/CreateProjectDialog";
 import { useProjects, useRenameProject } from "@/hooks/useProjects";
 import type { Project } from "@/hooks/useProjects";
+import { useCan } from "@/context/OrgContext";
 import { ApiError } from "@/lib/api";
 
 function RenameProjectDialog({ project, onOpenChange }: { project: Project; onOpenChange: (open: boolean) => void }) {
@@ -57,6 +58,8 @@ function RenameProjectDialog({ project, onOpenChange }: { project: Project; onOp
 
 export function ProjectsPage() {
   const { data, isPending, isError } = useProjects();
+  const can = useCan();
+  const canManage = can("admin");
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<Project | null>(null);
 
@@ -64,7 +67,7 @@ export function ProjectsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Projects</h1>
-        <Button onClick={() => setCreateOpen(true)}>New project</Button>
+        {canManage && <Button onClick={() => setCreateOpen(true)}>New project</Button>}
       </div>
 
       {isPending && <div className="text-sm text-muted-foreground">Loading…</div>}
@@ -102,9 +105,11 @@ export function ProjectsPage() {
                 <TableCell>{project.slug}</TableCell>
                 <TableCell>{new Date(project.createdAt).toLocaleDateString()}</TableCell>
                 <TableCell>
-                  <Button variant="outline" size="sm" onClick={() => setRenameTarget(project)}>
-                    Rename
-                  </Button>
+                  {canManage && (
+                    <Button variant="outline" size="sm" onClick={() => setRenameTarget(project)}>
+                      Rename
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
@@ -112,8 +117,8 @@ export function ProjectsPage() {
         </Table>
       )}
 
-      <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} />
-      {renameTarget && (
+      {canManage && <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} />}
+      {canManage && renameTarget && (
         <RenameProjectDialog
           project={renameTarget}
           onOpenChange={(open) => {
