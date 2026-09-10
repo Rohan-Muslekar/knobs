@@ -7,16 +7,20 @@ import { render } from "@testing-library/react";
 import { server, http, HttpResponse } from "@/test/msw";
 import { EnvironmentPage } from "@/pages/EnvironmentPage";
 import { Toaster } from "@/components/ui/sonner";
+import { OrgProvider } from "@/context/OrgContext";
+import type { Role } from "@/lib/roles";
 
-function renderEnvironmentPage() {
+function renderEnvironmentPage(role: Role = "editor") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter([{ path: "/environments/:envId", element: <EnvironmentPage /> }], {
     initialEntries: ["/environments/e1"],
   });
   return render(
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
-      <Toaster />
+      <OrgProvider organizations={[{ id: "org1", name: "Acme", slug: "acme", role }]}>
+        <RouterProvider router={router} />
+        <Toaster />
+      </OrgProvider>
     </QueryClientProvider>,
   );
 }

@@ -1,5 +1,6 @@
 import { Navigate, Outlet } from "react-router-dom";
 import { useSession } from "@/hooks/useAuth";
+import { OrgProvider } from "@/context/OrgContext";
 import { AppLayout } from "./AppLayout";
 
 export function RequireAuth() {
@@ -11,8 +12,10 @@ export function RequireAuth() {
     return <Navigate to="/login" replace />;
   }
   return (
-    <AppLayout email={data.email}>
-      <Outlet />
-    </AppLayout>
+    <OrgProvider organizations={data.organizations}>
+      <AppLayout email={data.email}>
+        <Outlet />
+      </AppLayout>
+    </OrgProvider>
   );
 }

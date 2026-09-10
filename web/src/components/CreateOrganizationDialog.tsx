@@ -13,35 +13,34 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useCreateProject } from "@/hooks/useProjects";
-import { useCurrentOrg } from "@/context/OrgContext";
+import { useCreateOrganization } from "@/hooks/useOrganizations";
+import type { Organization } from "@/hooks/useOrganizations";
 import { ApiError } from "@/lib/api";
 
-const createProjectSchema = z.object({
+const createOrganizationSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  slug: z.string().regex(/^[a-z0-9-]+$/, "Slug must be lowercase letters, numbers, and hyphens only"),
 });
 
-type CreateProjectFormValues = z.infer<typeof createProjectSchema>;
+type CreateOrganizationFormValues = z.infer<typeof createOrganizationSchema>;
 
-export function CreateProjectDialog({
+export function CreateOrganizationDialog({
   open,
   onOpenChange,
+  onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onCreated?: (org: Organization) => void;
 }) {
-  const currentOrg = useCurrentOrg();
-  const createProject = useCreateProject(currentOrg?.id ?? "");
+  const createOrganization = useCreateOrganization();
   const [formError, setFormError] = useState<string | null>(null);
 
   const {
     register,
     handleSubmit,
     reset,
-    setError,
     formState: { errors },
-  } = useForm<CreateProjectFormValues>({ resolver: zodResolver(createProjectSchema) });
+  } = useForm<CreateOrganizationFormValues>({ resolver: zodResolver(createOrganizationSchema) });
 
   const handleOpenChange = (next: boolean) => {
     if (!next) {
@@ -51,21 +50,16 @@ export function CreateProjectDialog({
     onOpenChange(next);
   };
 
-  const onSubmit = async (values: CreateProjectFormValues) => {
-    if (!currentOrg) {
-      setFormError("Select an organization first.");
-      return;
-    }
+  const onSubmit = async (values: CreateOrganizationFormValues) => {
     setFormError(null);
     try {
-      await createProject.mutateAsync(values);
-      toast.success("Project created");
+      const org = await createOrganization.mutateAsync(values);
+      toast.success("Organization created");
+      onCreated?.(org);
       reset();
       onOpenChange(false);
     } catch (err) {
-      if (err instanceof ApiError && err.status === 409) {
-        setError("slug", { message: "slug already exists" });
-      } else if (err instanceof ApiError) {
+      if (err instanceof ApiError) {
         setFormError(err.message);
       } else {
         setFormError("Something went wrong. Please try again.");
@@ -77,7 +71,7 @@ export function CreateProjectDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New project</DialogTitle>
+          <DialogTitle>New organization</DialogTitle>
         </DialogHeader>
         <form className="flex flex-col gap-4" onSubmit={handleSubmit(onSubmit)}>
           {formError && (
@@ -86,18 +80,13 @@ export function CreateProjectDialog({
             </div>
           )}
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="name">Name</Label>
-            <Input id="name" autoComplete="off" {...register("name")} />
+            <Label htmlFor="org-name">Name</Label>
+            <Input id="org-name" autoComplete="off" {...register("name")} />
             {errors.name && <p className="text-sm text-destructive">{errors.name.message}</p>}
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label htmlFor="slug">Slug</Label>
-            <Input id="slug" autoComplete="off" {...register("slug")} />
-            {errors.slug && <p className="text-sm text-destructive">{errors.slug.message}</p>}
-          </div>
           <DialogFooter>
-            <Button type="submit" disabled={createProject.isPending}>
-              {createProject.isPending ? "Creating…" : "Create"}
+            <Button type="submit" disabled={createOrganization.isPending}>
+              {createOrganization.isPending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
         </form>

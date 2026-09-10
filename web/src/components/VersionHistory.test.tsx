@@ -6,13 +6,17 @@ import { render } from "@testing-library/react";
 import { server, http, HttpResponse } from "@/test/msw";
 import { VersionHistory } from "@/components/VersionHistory";
 import { Toaster } from "@/components/ui/sonner";
+import { OrgProvider } from "@/context/OrgContext";
+import type { Role } from "@/lib/roles";
 
-function renderVersionHistory(envId = "e1") {
+function renderVersionHistory(envId = "e1", role: Role = "editor") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <VersionHistory envId={envId} />
-      <Toaster />
+      <OrgProvider organizations={[{ id: "org1", name: "Acme", slug: "acme", role }]}>
+        <VersionHistory envId={envId} />
+        <Toaster />
+      </OrgProvider>
     </QueryClientProvider>,
   );
 }
@@ -98,5 +102,14 @@ describe("VersionHistory", () => {
     await userEvent.click(await screen.findByRole("button", { name: /confirm/i }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/rollback failed/i));
+  });
+
+  it("hides the roll back button for a viewer", async () => {
+    server.use(http.get("/v1/environments/e1/versions", () => HttpResponse.json(twoVersions(2))));
+
+    renderVersionHistory("e1", "viewer");
+
+    await waitFor(() => expect(screen.getAllByRole("row")).toHaveLength(3));
+    expect(screen.queryByRole("button", { name: /roll back/i })).toBeNull();
   });
 });

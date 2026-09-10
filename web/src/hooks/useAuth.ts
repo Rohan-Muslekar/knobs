@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import type { Organization } from "@/hooks/useOrganizations";
 
-export type SessionUser = { id: string; email: string };
+export type SessionUser = { id: string; email: string; organizations: Organization[] };
 
 export function useSession() {
   return useQuery<SessionUser>({
