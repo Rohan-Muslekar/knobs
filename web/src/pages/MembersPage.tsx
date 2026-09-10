@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useAddMember, useMembers, useRemoveMember, useUpdateMemberRole } from "@/hooks/useOrganizations";
 import type { Member } from "@/hooks/useOrganizations";
 import { useOrg } from "@/context/OrgContext";
+import { roleAtLeast } from "@/lib/roles";
 import type { Role } from "@/lib/roles";
 import { ApiError } from "@/lib/api";
 
@@ -24,11 +25,13 @@ const ROLES: Role[] = ["viewer", "editor", "admin", "owner"];
 
 function AddMemberDialog({
   orgId,
+  callerRole,
   open,
   onOpenChange,
   onProvisioned,
 }: {
   orgId: string;
+  callerRole: Role | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onProvisioned: (info: { email: string; temporaryPassword: string }) => void;
@@ -37,6 +40,10 @@ function AddMemberDialog({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<Role>("viewer");
   const [formError, setFormError] = useState<string | null>(null);
+
+  // The server rejects granting a role above the caller's own, so only offer
+  // roles the caller is actually allowed to grant.
+  const grantableRoles = ROLES.filter((r) => roleAtLeast(callerRole, r));
 
   const handleOpenChange = (next: boolean) => {
     if (!next) {
@@ -93,7 +100,7 @@ function AddMemberDialog({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {ROLES.map((r) => (
+                {grantableRoles.map((r) => (
                   <SelectItem key={r} value={r}>
                     {r}
                   </SelectItem>
@@ -163,6 +170,10 @@ export function MembersPage() {
   const { organizations } = useOrg();
   const org = organizations.find((o) => o.id === id);
   const isOwner = org?.role === "owner";
+  // Same role source as `isOwner` above (the org this page is actually
+  // viewing, not necessarily the globally-selected "current org"), so the
+  // button's visibility can never disagree with the roles offered below it.
+  const canAddMember = roleAtLeast(org?.role, "admin");
 
   const members = useMembers(id);
   const updateRole = useUpdateMemberRole(id);
@@ -209,7 +220,7 @@ export function MembersPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Members</h1>
-        <Button onClick={() => setAddOpen(true)}>Add member</Button>
+        {canAddMember && <Button onClick={() => setAddOpen(true)}>Add member</Button>}
       </div>
 
       {rowError && (
@@ -266,7 +277,15 @@ export function MembersPage() {
         </Table>
       )}
 
-      <AddMemberDialog orgId={id} open={addOpen} onOpenChange={setAddOpen} onProvisioned={setProvisioned} />
+      {canAddMember && (
+        <AddMemberDialog
+          orgId={id}
+          callerRole={org?.role ?? null}
+          open={addOpen}
+          onOpenChange={setAddOpen}
+          onProvisioned={setProvisioned}
+        />
+      )}
 
       {provisioned && (
         <TempPasswordDialog info={provisioned} onOpenChange={(open) => !open && setProvisioned(null)} />

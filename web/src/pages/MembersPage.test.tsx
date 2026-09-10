@@ -96,4 +96,32 @@ describe("MembersPage", () => {
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent(/already a member/i));
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
   });
+
+  it("hides Add member for a viewer", async () => {
+    server.use(http.get("/v1/organizations/org1/members", () => HttpResponse.json([])));
+
+    renderMembers("org1", "viewer");
+    await waitFor(() => expect(screen.getByText(/no members yet/i)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /add member/i })).toBeNull();
+  });
+
+  it("hides Add member for an editor", async () => {
+    server.use(http.get("/v1/organizations/org1/members", () => HttpResponse.json([])));
+
+    renderMembers("org1", "editor");
+    await waitFor(() => expect(screen.getByText(/no members yet/i)).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /add member/i })).toBeNull();
+  });
+
+  it("shows Add member for an admin, and only offers roles up to the caller's own", async () => {
+    server.use(http.get("/v1/organizations/org1/members", () => HttpResponse.json([])));
+
+    renderMembers("org1", "admin");
+    await waitFor(() => expect(screen.getByText(/no members yet/i)).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /add member/i }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Role" }));
+    expect(await screen.findByRole("option", { name: "admin" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "owner" })).toBeNull();
+  });
 });

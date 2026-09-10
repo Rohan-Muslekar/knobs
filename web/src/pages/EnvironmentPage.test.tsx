@@ -349,4 +349,19 @@ describe("EnvironmentPage", () => {
     await waitFor(() => expect(screen.getAllByText(/weights must sum to 100/i)).toHaveLength(2));
     expect(screen.getByLabelText("maxRetries targeting rules")).toBeInTheDocument();
   });
+
+  it("hides the Save control for a viewer", async () => {
+    server.use(
+      envHandler,
+      versionsHandler,
+      schemaHandler,
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
+      ),
+    );
+    renderEnvironmentPage("viewer");
+
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(3));
+    expect(screen.queryByRole("button", { name: /save/i })).toBeNull();
+  });
 });
