@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/Rohan-Muslekar/knobs/internal/authz"
 	"github.com/Rohan-Muslekar/knobs/internal/delivery"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 )
@@ -19,11 +20,8 @@ func (d Deps) handleListVersions(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid environment id")
 		return
 	}
-	if _, err := d.Repo.EnvironmentByID(r.Context(), d.Repo.Pool(), envID); errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "environment not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load environment")
+	uid, _ := currentUserID(r.Context())
+	if _, _, err := d.authorizeEnv(r.Context(), d.Repo.Pool(), uid, envID, authz.RoleViewer); writeAuthzErr(w, err) {
 		return
 	}
 
@@ -60,18 +58,13 @@ func (d Deps) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	env, err := d.Repo.EnvironmentByID(r.Context(), d.Repo.Pool(), envID)
-	if errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "environment not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load environment")
-		return
-	}
-
 	// requireUser has already run on this route, so the id is always present;
 	// the ok is discarded rather than checked again.
 	uid, _ := currentUserID(r.Context())
+	env, _, err := d.authorizeEnv(r.Context(), d.Repo.Pool(), uid, envID, authz.RoleEditor)
+	if writeAuthzErr(w, err) {
+		return
+	}
 	target := *req.Version
 	var targetVersion store.ConfigVersion
 	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {

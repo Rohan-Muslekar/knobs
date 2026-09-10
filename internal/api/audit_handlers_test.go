@@ -11,9 +11,9 @@ import (
 )
 
 func TestAuditAPI(t *testing.T) {
-	router, cookie, _ := seededRouter(t)
+	router, cookie, _, orgID := seededRouter(t)
 
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201", projRec.Code)
 	}

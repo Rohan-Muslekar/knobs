@@ -10,14 +10,16 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/Rohan-Muslekar/knobs/internal/authz"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 )
 
 var slugRe = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 type createProjectRequest struct {
-	Name string `json:"name"`
-	Slug string `json:"slug"`
+	Name           string    `json:"name"`
+	Slug           string    `json:"slug"`
+	OrganizationID uuid.UUID `json:"organizationId"`
 }
 
 func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -30,21 +32,20 @@ func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnprocessableEntity, "name required and slug must match ^[a-z0-9-]+$")
 		return
 	}
+	if req.OrganizationID == uuid.Nil {
+		writeErr(w, http.StatusUnprocessableEntity, "organizationId required")
+		return
+	}
 	// requireUser has already run on this route, so the id is always present;
 	// the ok is discarded rather than checked again.
 	uid, _ := currentUserID(r.Context())
-	// TODO(task 3): resolve the caller's organization from a route/context
-	// value once org-scoped routing lands; every project is created under
-	// the "default" org until then.
-	org, err := d.Repo.OrganizationBySlug(r.Context(), d.Repo.Pool(), "default")
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not resolve organization")
+	if _, err := d.authorizeOrg(r.Context(), d.Repo.Pool(), uid, req.OrganizationID, authz.RoleAdmin); writeAuthzErr(w, err) {
 		return
 	}
 	var p store.Project
-	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
+	err := d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
 		var e error
-		p, e = d.Repo.CreateProject(r.Context(), tx, org.ID, req.Name, req.Slug)
+		p, e = d.Repo.CreateProject(r.Context(), tx, req.OrganizationID, req.Name, req.Slug)
 		if e != nil {
 			return e
 		}
@@ -63,8 +64,12 @@ func (d Deps) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, projectView(p))
 }
 
+// handleListProjects has no authorize call: it isn't scoped to a single
+// org, so there's no single role to check. Instead it filters at the
+// query level to only the organizations the caller belongs to.
 func (d Deps) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	ps, err := d.Repo.ListProjects(r.Context(), d.Repo.Pool())
+	uid, _ := currentUserID(r.Context())
+	ps, err := d.Repo.ListProjectsForUser(r.Context(), d.Repo.Pool(), uid)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not list projects")
 		return
@@ -82,13 +87,9 @@ func (d Deps) handleGetProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid project id")
 		return
 	}
-	p, err := d.Repo.ProjectByID(r.Context(), d.Repo.Pool(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "project not found")
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load project")
+	uid, _ := currentUserID(r.Context())
+	p, _, err := d.authorizeProject(r.Context(), d.Repo.Pool(), uid, id, authz.RoleViewer)
+	if writeAuthzErr(w, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, projectView(p))
@@ -116,6 +117,9 @@ func (d Deps) handlePatchProject(w http.ResponseWriter, r *http.Request) {
 	// requireUser has already run on this route, so the id is always present;
 	// the ok is discarded rather than checked again.
 	uid, _ := currentUserID(r.Context())
+	if _, _, err := d.authorizeProject(r.Context(), d.Repo.Pool(), uid, id, authz.RoleAdmin); writeAuthzErr(w, err) {
+		return
+	}
 	var p store.Project
 	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
 		var e error
