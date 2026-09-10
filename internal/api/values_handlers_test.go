@@ -9,9 +9,9 @@ import (
 )
 
 func TestValuesAPI(t *testing.T) {
-	router, cookie, repo := seededRouter(t)
+	router, cookie, repo, orgID := seededRouter(t)
 
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201", projRec.Code)
 	}
@@ -151,9 +151,9 @@ func TestValuesAPI(t *testing.T) {
 // whichever version's targeting the rollback lands on rather than leaking
 // the targeting from the version that was current before the rollback.
 func TestValuesAPI_Targeting(t *testing.T) {
-	router, cookie, _ := seededRouter(t)
+	router, cookie, _, orgID := seededRouter(t)
 
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
 	}

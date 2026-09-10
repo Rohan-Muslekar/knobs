@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Rohan-Muslekar/knobs/internal/apikey"
+	"github.com/Rohan-Muslekar/knobs/internal/authz"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 )
 
@@ -34,12 +35,9 @@ func (d Deps) handleCreateApiKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnprocessableEntity, "name required")
 		return
 	}
-	env, err := d.Repo.EnvironmentByID(r.Context(), d.Repo.Pool(), envID)
-	if errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "environment not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load environment")
+	uid, _ := currentUserID(r.Context())
+	env, _, err := d.authorizeEnv(r.Context(), d.Repo.Pool(), uid, envID, authz.RoleAdmin)
+	if writeAuthzErr(w, err) {
 		return
 	}
 	plaintext, hash, err := apikey.Generate()
@@ -47,9 +45,6 @@ func (d Deps) handleCreateApiKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "could not generate key")
 		return
 	}
-	// requireUser has already run on this route, so the id is always present;
-	// the ok is discarded rather than checked again.
-	uid, _ := currentUserID(r.Context())
 	var k store.ApiKey
 	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
 		var e error
@@ -80,11 +75,8 @@ func (d Deps) handleListApiKeys(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid environment id")
 		return
 	}
-	if _, err := d.Repo.EnvironmentByID(r.Context(), d.Repo.Pool(), envID); errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "environment not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load environment")
+	uid, _ := currentUserID(r.Context())
+	if _, _, err := d.authorizeEnv(r.Context(), d.Repo.Pool(), uid, envID, authz.RoleViewer); writeAuthzErr(w, err) {
 		return
 	}
 	keys, err := d.Repo.ListApiKeys(r.Context(), d.Repo.Pool(), envID)
@@ -110,17 +102,13 @@ func (d Deps) handleRevokeApiKey(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid key id")
 		return
 	}
-	env, err := d.Repo.EnvironmentByID(r.Context(), d.Repo.Pool(), envID)
-	if errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "environment not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load environment")
-		return
-	}
 	// requireUser has already run on this route, so the id is always present;
 	// the ok is discarded rather than checked again.
 	uid, _ := currentUserID(r.Context())
+	env, _, err := d.authorizeEnv(r.Context(), d.Repo.Pool(), uid, envID, authz.RoleAdmin)
+	if writeAuthzErr(w, err) {
+		return
+	}
 	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
 		if e := d.Repo.RevokeApiKey(r.Context(), tx, keyID, envID); e != nil {
 			return e

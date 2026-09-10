@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCreateProject } from "@/hooks/useProjects";
+import { useCurrentOrg } from "@/context/OrgContext";
 import { ApiError } from "@/lib/api";
 
 const createProjectSchema = z.object({
@@ -30,7 +31,8 @@ export function CreateProjectDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const createProject = useCreateProject();
+  const currentOrg = useCurrentOrg();
+  const createProject = useCreateProject(currentOrg?.id ?? "");
   const [formError, setFormError] = useState<string | null>(null);
 
   const {
@@ -50,6 +52,10 @@ export function CreateProjectDialog({
   };
 
   const onSubmit = async (values: CreateProjectFormValues) => {
+    if (!currentOrg) {
+      setFormError("Select an organization first.");
+      return;
+    }
     setFormError(null);
     try {
       await createProject.mutateAsync(values);

@@ -17,11 +17,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useRollback, useVersions } from "@/hooks/useVersions";
+import { useCan } from "@/context/OrgContext";
 import { ApiError } from "@/lib/api";
 
 export function VersionHistory({ envId }: { envId: string }) {
   const versions = useVersions(envId);
   const rollback = useRollback(envId);
+  const can = useCan();
+  const canRollback = can("editor");
 
   const [pendingVersion, setPendingVersion] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,7 +93,7 @@ export function VersionHistory({ envId }: { envId: string }) {
                   )}
                 </TableCell>
                 <TableCell>
-                  {!v.isCurrent && (
+                  {!v.isCurrent && canRollback && (
                     <Button variant="outline" size="sm" onClick={() => setPendingVersion(v.version)}>
                       Roll back
                     </Button>

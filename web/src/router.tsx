@@ -6,6 +6,7 @@ import { ProjectDetailPage } from "@/pages/ProjectDetailPage";
 import { SchemaBuilderPage } from "@/pages/SchemaBuilderPage";
 import { EnvironmentPage } from "@/pages/EnvironmentPage";
 import { AuditPage } from "@/pages/AuditPage";
+import { MembersPage } from "@/pages/MembersPage";
 
 export const router = createBrowserRouter([
   { path: "/login", element: <LoginPage /> },
@@ -17,6 +18,7 @@ export const router = createBrowserRouter([
       { path: "/projects/:projectId/schema", element: <SchemaBuilderPage /> },
       { path: "/projects/:projectId/audit", element: <AuditPage /> },
       { path: "/environments/:envId", element: <EnvironmentPage /> },
+      { path: "/organizations/:orgId/members", element: <MembersPage /> },
     ],
   },
 ]);

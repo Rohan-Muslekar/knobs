@@ -7,16 +7,20 @@ import { render } from "@testing-library/react";
 import { server, http, HttpResponse } from "@/test/msw";
 import { EnvironmentPage } from "@/pages/EnvironmentPage";
 import { Toaster } from "@/components/ui/sonner";
+import { OrgProvider } from "@/context/OrgContext";
+import type { Role } from "@/lib/roles";
 
-function renderEnvironmentPage() {
+function renderEnvironmentPage(role: Role = "editor") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const router = createMemoryRouter([{ path: "/environments/:envId", element: <EnvironmentPage /> }], {
     initialEntries: ["/environments/e1"],
   });
   return render(
     <QueryClientProvider client={client}>
-      <RouterProvider router={router} />
-      <Toaster />
+      <OrgProvider organizations={[{ id: "org1", name: "Acme", slug: "acme", role }]}>
+        <RouterProvider router={router} />
+        <Toaster />
+      </OrgProvider>
     </QueryClientProvider>,
   );
 }
@@ -344,5 +348,20 @@ describe("EnvironmentPage", () => {
     // field one must show even though its section was collapsed.
     await waitFor(() => expect(screen.getAllByText(/weights must sum to 100/i)).toHaveLength(2));
     expect(screen.getByLabelText("maxRetries targeting rules")).toBeInTheDocument();
+  });
+
+  it("hides the Save control for a viewer", async () => {
+    server.use(
+      envHandler,
+      versionsHandler,
+      schemaHandler,
+      http.get("/v1/environments/e1/values", () =>
+        HttpResponse.json({ version: 1, values: { maxRetries: 3, featureX: true }, schemaVersion: 1 }),
+      ),
+    );
+    renderEnvironmentPage("viewer");
+
+    await waitFor(() => expect(screen.getByLabelText("maxRetries")).toHaveValue(3));
+    expect(screen.queryByRole("button", { name: /save/i })).toBeNull();
   });
 });

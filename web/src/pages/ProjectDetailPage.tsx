@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { CreateEnvironmentDialog } from "@/components/CreateEnvironmentDialog";
 import { useEnvironments, useProject } from "@/hooks/useEnvironments";
+import { useCan } from "@/context/OrgContext";
 import { ApiError } from "@/lib/api";
 
 export function ProjectDetailPage() {
@@ -11,6 +12,8 @@ export function ProjectDetailPage() {
   const id = projectId ?? "";
   const project = useProject(id);
   const environments = useEnvironments(id);
+  const can = useCan();
+  const canManage = can("admin");
   const [createOpen, setCreateOpen] = useState(false);
 
   const isPending = project.isPending || environments.isPending;
@@ -50,7 +53,7 @@ export function ProjectDetailPage() {
           <Link to={`/projects/${id}/audit`} className="text-sm text-primary hover:underline">
             Audit log
           </Link>
-          <Button onClick={() => setCreateOpen(true)}>New environment</Button>
+          {canManage && <Button onClick={() => setCreateOpen(true)}>New environment</Button>}
         </div>
       </div>
 
@@ -83,7 +86,7 @@ export function ProjectDetailPage() {
         </Table>
       )}
 
-      <CreateEnvironmentDialog projectId={id} open={createOpen} onOpenChange={setCreateOpen} />
+      {canManage && <CreateEnvironmentDialog projectId={id} open={createOpen} onOpenChange={setCreateOpen} />}
     </div>
   );
 }
