@@ -20,9 +20,9 @@ import (
 // schemaHash equal to delivery.SchemaHash of that same definition, and
 // neither a missing/invalid Bearer token nor a session cookie satisfies it.
 func TestSchemaDelivery(t *testing.T) {
-	router, cookie, repo := seededRouter(t)
+	router, cookie, repo, orgID := seededRouter(t)
 
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
 	}

@@ -41,9 +41,9 @@ import (
 // lock around both the read and the write, so neither can act on a schema
 // already superseded by the other.
 func TestSchemaValueConcurrencyInvariant(t *testing.T) {
-	router, cookie, repo := seededRouter(t)
+	router, cookie, repo, orgID := seededRouter(t)
 
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
 	}

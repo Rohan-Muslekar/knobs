@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/Rohan-Muslekar/knobs/internal/authz"
 	"github.com/Rohan-Muslekar/knobs/internal/store"
 )
 
@@ -31,16 +32,12 @@ func (d Deps) handleCreateEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnprocessableEntity, "name required and must match ^[a-z0-9-]+$")
 		return
 	}
-	if _, err := d.Repo.ProjectByID(r.Context(), d.Repo.Pool(), projectID); errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "project not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load project")
-		return
-	}
 	// requireUser has already run on this route, so the id is always present;
 	// the ok is discarded rather than checked again.
 	uid, _ := currentUserID(r.Context())
+	if _, _, err := d.authorizeProject(r.Context(), d.Repo.Pool(), uid, projectID, authz.RoleAdmin); writeAuthzErr(w, err) {
+		return
+	}
 	var e store.Environment
 	err = d.Repo.WithTx(r.Context(), func(tx pgxTx) error {
 		var e2 error
@@ -69,11 +66,8 @@ func (d Deps) handleListEnvironments(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid project id")
 		return
 	}
-	if _, err := d.Repo.ProjectByID(r.Context(), d.Repo.Pool(), projectID); errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "project not found")
-		return
-	} else if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load project")
+	uid, _ := currentUserID(r.Context())
+	if _, _, err := d.authorizeProject(r.Context(), d.Repo.Pool(), uid, projectID, authz.RoleViewer); writeAuthzErr(w, err) {
 		return
 	}
 	es, err := d.Repo.ListEnvironments(r.Context(), d.Repo.Pool(), projectID)
@@ -94,13 +88,9 @@ func (d Deps) handleGetEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid environment id")
 		return
 	}
-	e, err := d.Repo.EnvironmentByID(r.Context(), d.Repo.Pool(), id)
-	if errors.Is(err, store.ErrNotFound) {
-		writeErr(w, http.StatusNotFound, "environment not found")
-		return
-	}
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, "could not load environment")
+	uid, _ := currentUserID(r.Context())
+	e, _, err := d.authorizeEnv(r.Context(), d.Repo.Pool(), uid, id, authz.RoleViewer)
+	if writeAuthzErr(w, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, environmentView(e))

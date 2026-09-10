@@ -30,7 +30,7 @@ import (
 // insufficient here, since the whole point of this file is proving
 // pg_notify -> Listener -> Hub -> SSE frame actually happens end to end,
 // not mocking any leg of that chain.
-func streamTestApp(t *testing.T) (router http.Handler, cookie string, repo *store.Repo, shutdown chan struct{}) {
+func streamTestApp(t *testing.T) (router http.Handler, cookie string, repo *store.Repo, shutdown chan struct{}, orgID uuid.UUID) {
 	t.Helper()
 	pool, url := migratedPoolAndURL(t)
 	repo = store.New(pool)
@@ -39,9 +39,18 @@ func streamTestApp(t *testing.T) (router http.Handler, cookie string, repo *stor
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	if _, err := repo.CreateUser(t.Context(), repo.Pool(), "a@x.com", hash); err != nil {
+	u, err := repo.CreateUser(t.Context(), repo.Pool(), "a@x.com", hash)
+	if err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
+	org, err := repo.CreateOrganization(t.Context(), repo.Pool(), "Acme Org", "acme-org")
+	if err != nil {
+		t.Fatalf("seed org: %v", err)
+	}
+	if err := repo.AddMember(t.Context(), repo.Pool(), org.ID, u.ID, "owner"); err != nil {
+		t.Fatalf("seed membership: %v", err)
+	}
+	orgID = org.ID
 
 	hub := delivery.NewHub()
 	loader := func(ctx context.Context, envID uuid.UUID) (delivery.Snapshot, bool) {
@@ -97,7 +106,7 @@ func streamTestApp(t *testing.T) (router http.Handler, cookie string, repo *stor
 		t.Fatalf("login failed: %d", rec.Code)
 	}
 	cookie = rec.Result().Cookies()[0].Value
-	return router, cookie, repo, shutdown
+	return router, cookie, repo, shutdown, orgID
 }
 
 // seedStreamFixture creates a project + schema + environment + an initial
@@ -105,9 +114,9 @@ func streamTestApp(t *testing.T) (router http.Handler, cookie string, repo *stor
 // existing in-process httptest.ResponseRecorder helpers (fast, no
 // network). Shared by every test in this file that needs a real
 // environment to open a stream against.
-func seedStreamFixture(t *testing.T, router http.Handler, cookie string) (envID, key string) {
+func seedStreamFixture(t *testing.T, router http.Handler, cookie string, orgID uuid.UUID) (envID, key string) {
 	t.Helper()
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
 	}
@@ -264,8 +273,8 @@ func assertNoFrame(t *testing.T, frames <-chan map[string]any, window time.Durat
 // are bounded (waitFrame / assertNoFrame timeouts), so a broken fan-out
 // fails fast rather than hanging the suite.
 func TestStreamFanOut(t *testing.T) {
-	router, cookie, _, _ := streamTestApp(t)
-	envID, key := seedStreamFixture(t, router, cookie)
+	router, cookie, _, _, orgID := streamTestApp(t)
+	envID, key := seedStreamFixture(t, router, cookie, orgID)
 
 	ts := httptest.NewServer(router)
 	defer ts.Close()
@@ -397,8 +406,8 @@ func TestStreamFanOut(t *testing.T) {
 // waitFrame fails via "stream closed"). With the fix, the deadline is
 // cleared entirely, so the wait is a no-op and the frame arrives normally.
 func TestStreamSurvivesShortWriteTimeout(t *testing.T) {
-	router, cookie, _, _ := streamTestApp(t)
-	envID, key := seedStreamFixture(t, router, cookie)
+	router, cookie, _, _, orgID := streamTestApp(t)
+	envID, key := seedStreamFixture(t, router, cookie, orgID)
 
 	ts := httptest.NewUnstartedServer(router)
 	ts.Config.WriteTimeout = 1 * time.Second
@@ -458,8 +467,8 @@ func TestStreamSurvivesShortWriteTimeout(t *testing.T) {
 // fails if a *newer* frame or a non-comment, non-data line shows up before
 // the heartbeat, or if no heartbeat arrives within the bounded timeout.
 func TestStreamHeartbeat(t *testing.T) {
-	router, cookie, _, _ := streamTestApp(t)
-	_, key := seedStreamFixture(t, router, cookie)
+	router, cookie, _, _, orgID := streamTestApp(t)
+	_, key := seedStreamFixture(t, router, cookie, orgID)
 
 	ts := httptest.NewServer(router)
 	defer ts.Close()
@@ -547,8 +556,8 @@ func TestStreamHeartbeat(t *testing.T) {
 // deadline, so a regression (handleStream not observing the shutdown
 // channel) fails this test in 3s rather than hanging.
 func TestStreamShutdownSignalDrainsConnection(t *testing.T) {
-	router, cookie, _, shutdown := streamTestApp(t)
-	_, key := seedStreamFixture(t, router, cookie)
+	router, cookie, _, shutdown, orgID := streamTestApp(t)
+	_, key := seedStreamFixture(t, router, cookie, orgID)
 
 	ts := httptest.NewServer(router)
 	defer ts.Close()
@@ -607,8 +616,8 @@ func TestStreamShutdownSignalDrainsConnection(t *testing.T) {
 // existing consumer that doesn't know about deltas, which is exactly what
 // this test exists to catch.
 func TestStreamDefaultHasNoTypeField(t *testing.T) {
-	router, cookie, _, _ := streamTestApp(t)
-	envID, key := seedStreamFixture(t, router, cookie)
+	router, cookie, _, _, orgID := streamTestApp(t)
+	envID, key := seedStreamFixture(t, router, cookie, orgID)
 
 	ts := httptest.NewServer(router)
 	defer ts.Close()
@@ -651,9 +660,9 @@ func TestStreamDefaultHasNoTypeField(t *testing.T) {
 // specifically so "exactly the changed key" is a real assertion and not
 // vacuously true.
 func TestStreamDeltaOptIn(t *testing.T) {
-	router, cookie, _, _ := streamTestApp(t)
+	router, cookie, _, _, orgID := streamTestApp(t)
 
-	projRec := post(router, "/v1/projects", `{"name":"Acme","slug":"acme"}`, cookie)
+	projRec := post(router, "/v1/projects", createProjectBody(orgID, "Acme", "acme"), cookie)
 	if projRec.Code != http.StatusCreated {
 		t.Fatalf("create project = %d, want 201, body=%s", projRec.Code, projRec.Body.String())
 	}
@@ -765,8 +774,8 @@ func TestStreamDeltaOptIn(t *testing.T) {
 // below just guarantees some frame arrives even when the seed's notify has
 // already been fully drained before this stream subscribed.
 func TestStreamDeltaNoBaselineSendsFullFrame(t *testing.T) {
-	router, cookie, _, _ := streamTestApp(t)
-	envID, key := seedStreamFixture(t, router, cookie)
+	router, cookie, _, _, orgID := streamTestApp(t)
+	envID, key := seedStreamFixture(t, router, cookie, orgID)
 
 	ts := httptest.NewServer(router)
 	defer ts.Close()
